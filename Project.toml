@@ -1,0 +1,17 @@
+name = "CloudStore"
+uuid = "3365d9ee-d53b-4a56-812d-5344d5b716d7"
+authors = ["quinnj <quinn.jacobd@gmail.com>"]
+version = "1.0.0"
+
+[deps]
+CloudBase = "85eb1798-d7c4-4918-bb13-c944d38e27ed"
+
+[compat]
+CloudBase = "1"
+julia = "1.6"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
