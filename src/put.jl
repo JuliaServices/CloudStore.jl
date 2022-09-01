@@ -34,10 +34,11 @@ end
 
 function putObject(mod, x::AbstractStore, key::String, in::RequestBodyType;
     multipartThreshold::Int=64_000_000,
-    multipartSize::Int=16_000_000,
+    partSize::Int=16_000_000,
+    batchSize::Int=defaultBatchSize(),
     allowMultipart::Bool=true,
-    compress::Bool=false,
-    kw...)
+    compress::Bool=false, kw...)
+
     N = nbytes(in)
     if N <= multipartThreshold || !allowMultipart
         body = prepBody(in, compress)
@@ -48,19 +49,28 @@ function putObject(mod, x::AbstractStore, key::String, in::RequestBodyType;
     uploadState = mod.startMultipartUpload(x, key; kw...)
     url = joinpath(x.baseurl, key)
     eTags = String[]
-    s = OrderedSynchronizer(1)
-    i = 1
+    sync = OrderedSynchronizer(1)
     body = prepBodyMultipart(in, compress)
-    @sync for i = 1:cld(N, multipartSize)
-        # while cld(N, multipartSize) is the *most* # of parts; w/ compression, we won't need as many loops
-        # so we make sure to check eof and break if we finish early
-        part = read(body, multipartSize)
-        # @show i, length(part)
-        let i=i, part=part
-            Threads.@spawn begin
-                eTag = mod.uploadPart(url, part, i, uploadState; kw...)
-                let eTag=eTag
-                    put!(() -> push!(eTags, eTag), s, i)
+    nTasks = cld(N, partSize)
+    nLoops = cld(nTasks, batchSize)
+    # while nLoops * batchSize is the *max* # of iterations we'll do
+    # if we're compressing, it will likely be much fewer, so we add
+    # eof(body) checks to both loops to account for earlier termination
+    for j = 1:nLoops
+        @sync for i = 1:batchSize
+            eof(body) && break
+            n = (j - 1) * batchSize + i
+            #TODO: we should avoid the extra copies when the input is a Vector{UInt8}
+            # currently we wrap it in IOBuffer and then call a plain read on it
+            part = read(body, partSize)
+            let n=n, part=part
+                Threads.@spawn begin
+                    eTag = mod.uploadPart(url, part, n, uploadState; kw...)
+                    let eTag=eTag
+                        # we synchronize the eTags here because the order matters
+                        # for the final call to completeMultipartUpload
+                        put!(() -> push!(eTags, eTag), sync, n)
+                    end
                 end
             end
         end
