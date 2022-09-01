@@ -1,7 +1,7 @@
 module S3
 
 using CloudBase.AWS, XMLDict, HTTP, CodecZlib
-import ..ResponseBodyType, ..RequestBodyType, ..getObject, ..putObject, ..Object, ..etag, ..object
+import ..ResponseBodyType, ..RequestBodyType, ..getObject, ..putObject, ..Object, ..etag, ..asArray
 
 const Bucket = AWS.Bucket
 
@@ -15,7 +15,13 @@ const Bucket = AWS.Bucket
 #     AWS.put(x.baseurl; credentials, verbose)
 # end
 
-function list(x::Bucket; prefix="", credentials::Union{Nothing, AWS.Credentials}=nothing, maxKeys=1000, verbose=0)
+object(b, x) = Object(b, x["Key"], x["LastModified"], etag(x["ETag"]), parse(Int, x["Size"]), x["StorageClass"])
+
+function list(x::Bucket; prefix="", maxKeys=1000, kw...)
+    if maxKeys > 1000
+        @warn "S3 only supports 1000 keys per request: `$maxKeys` requested"
+        maxKeys = 1000
+    end
     query = Dict("list-type" => "2")
     if !isempty(prefix)
         query["prefix"] = prefix
@@ -23,13 +29,19 @@ function list(x::Bucket; prefix="", credentials::Union{Nothing, AWS.Credentials}
     if maxKeys != 1000
         query["max-keys"] = string(maxKeys)
     end
-    result = xml_dict(String(AWS.get(x.baseurl; query, credentials, verbose).body))["ListBucketResult"]
-    contents = map(y -> object(x, y), result["Contents"])
+    result = xml_dict(String(AWS.get(x.baseurl; query, service="s3", kw...).body))["ListBucketResult"]
+    if parse(Int, result["KeyCount"]) == 0
+        return Object[]
+    end
+    contents = map(y -> object(x, y), asArray(result["Contents"]))
     while result["IsTruncated"] == "true"
         query["continuation-token"] = result["NextContinuationToken"]
-        resp = AWS.get(x.baseurl; query, credentials, verbose)
-        result = xml_dict(String(resp.body))["ListBucketResult"]
-        append!(contents, map(y -> object(x, y), result["Contents"]))
+        result = xml_dict(String(AWS.get(x.baseurl; query, service="s3", kw...).body))["ListBucketResult"]
+        if parse(Int, result["KeyCount"]) > 0
+            append!(contents, map(y -> object(x, y), asArray(result["Contents"])))
+        else
+            break
+        end
     end
     return contents
 end
@@ -38,6 +50,9 @@ get(x::Object, out::ResponseBodyType=nothing; kw...) = get(x.store, x.key, out; 
 function get(x::Bucket, key::String, out::ResponseBodyType=nothing; kw...)
     return getObject(AWS, joinpath(x.baseurl, key), out, "s3"; kw...)
 end
+
+head(x::Object; kw...) = head(x.store, x.key; kw...)
+head(x::Bucket, key::String; kw...) = Dict(AWS.head(joinpath(x.baseurl, key); service="s3", kw...).headers)
 
 put(x::Bucket, key::String, in::RequestBodyType; kw...) =
     putObject(S3, x, key, in; kw...)
@@ -59,5 +74,8 @@ function completeMultipartUpload(url, eTags, uploadId; kw...)
     resp = AWS.post(url; query=Dict("uploadId" => uploadId), body, service="s3", kw...)
     return etag(HTTP.header(resp, "ETag"))
 end
+
+delete(x::Bucket, key; kw...) = AWS.delete(joinpath(x.baseurl, key); service="s3", kw...)
+delete(x::Object; kw...) = delete(x.store, x.key; kw...)
 
 end # S3

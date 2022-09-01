@@ -59,6 +59,14 @@ check(x, y) = begin; reset!(x); reset!(y); z = read(x) == read(y); reset!(x); re
                 data = S3.get(obj, out; credentials)
                 @test check(body, data)
                 resetOut!(out)
+                # object metadata
+                meta = S3.head(bucket, "test.csv"; credentials)
+                @test meta isa Dict && !isempty(meta)
+
+                # list
+                objs = S3.list(bucket; credentials)
+                @test length(objs) == 1
+                @test objs[1].key == "test.csv"
 
                 println("in: $inBody, out: $outBody, single part, compression")
                 obj = S3.put(bucket, "test2.csv", body; compress=true, credentials)
@@ -80,6 +88,23 @@ check(x, y) = begin; reset!(x); reset!(y); z = read(x) == read(y); reset!(x); re
                 @test check(mbody, data)
                 resetOut!(out)
                 cleanup!(mbody)
+
+                # list
+                objs = S3.list(bucket; credentials)
+                @test length(objs) == 4
+                @test map(x -> x.key, objs) == ["test.csv", "test2.csv", "test3.csv", "test4.csv"]
+                objs = S3.list(bucket; maxKeys=1, credentials)
+                @test length(objs) == 4
+                @test map(x -> x.key, objs) == ["test.csv", "test2.csv", "test3.csv", "test4.csv"]
+
+                # delete
+                S3.delete(bucket, "test.csv"; credentials)
+                S3.delete(bucket, "test2.csv"; credentials)
+                S3.delete(bucket, "test3.csv"; credentials)
+                S3.delete(bucket, "test4.csv"; credentials)
+                
+                objs = S3.list(bucket; credentials)
+                @test length(objs) == 0
             end
         end
     end
@@ -88,7 +113,7 @@ end
 @time @testset "Blobs" begin
     # conf, p = Azurite.run(; debug=true)
     Azurite.with(; debug=true) do conf
-        credentials, bucket = conf
+        credentials, container = conf
         csv = "a,b,c\n1,2,3\n4,5,$(rand())"
         multicsv = "1,2,3,4,5,6,7,8,9,1\n"^1000000; # 20MB
         for inBody in (bytes, stringfile, iobuffer, iofile)
@@ -96,18 +121,26 @@ end
                 body = inBody(csv)
                 out = outType(outBody)
                 println("in: $inBody, out: $outBody, single part, no compression")
-                obj = Blobs.put(bucket, "test.csv", body; credentials, require_ssl_verification=false)
-                data = Blobs.get(bucket, "test.csv", out; credentials, require_ssl_verification=false)
+                obj = Blobs.put(container, "test.csv", body; credentials, require_ssl_verification=false)
+                data = Blobs.get(container, "test.csv", out; credentials, require_ssl_verification=false)
                 @test check(body, data)
                 resetOut!(out)
                 # get on Object
                 data = Blobs.get(obj, out; credentials, require_ssl_verification=false)
                 @test check(body, data)
                 resetOut!(out)
+                # object metadata
+                meta = Blobs.head(container, "test.csv"; credentials, require_ssl_verification=false)
+                @test meta isa Dict && !isempty(meta)
+
+                # list
+                objs = Blobs.list(container; credentials, require_ssl_verification=false)
+                @test length(objs) == 1
+                @test objs[1].key == "test.csv"
 
                 println("in: $inBody, out: $outBody, single part, compression")
-                obj = Blobs.put(bucket, "test2.csv", body; compress=true, credentials, require_ssl_verification=false)
-                data = Blobs.get(bucket, "test2.csv", out; decompress=true, credentials, require_ssl_verification=false)
+                obj = Blobs.put(container, "test2.csv", body; compress=true, credentials, require_ssl_verification=false)
+                data = Blobs.get(container, "test2.csv", out; decompress=true, credentials, require_ssl_verification=false)
                 @test check(body, data)
                 resetOut!(out)
                 cleanup!(body)
@@ -115,16 +148,33 @@ end
                 mbody = inBody(multicsv);
                 out = outType(outBody)
                 println("in: $inBody, out: $outBody, multipart, no compression")
-                obj = Blobs.put(bucket, "test3.csv", mbody; multipartThreshold=5_000_000, multipartSize=5_500_000, credentials, require_ssl_verification=false)
-                data = Blobs.get(bucket, "test3.csv", out; credentials, require_ssl_verification=false)
+                obj = Blobs.put(container, "test3.csv", mbody; multipartThreshold=5_000_000, multipartSize=5_500_000, credentials, require_ssl_verification=false)
+                data = Blobs.get(container, "test3.csv", out; credentials, require_ssl_verification=false)
                 @test check(mbody, data)
                 resetOut!(out)
                 println("in: $inBody, out: $outBody, multipart, compression")
-                obj = Blobs.put(bucket, "test4.csv", mbody; compress=true, multipartThreshold=5_000_000, multipartSize=5_500_000, credentials, require_ssl_verification=false)
-                data = Blobs.get(bucket, "test4.csv", out; decompress=true, credentials, require_ssl_verification=false)
+                obj = Blobs.put(container, "test4.csv", mbody; compress=true, multipartThreshold=5_000_000, multipartSize=5_500_000, credentials, require_ssl_verification=false)
+                data = Blobs.get(container, "test4.csv", out; decompress=true, credentials, require_ssl_verification=false)
                 @test check(mbody, data)
                 resetOut!(out)
                 cleanup!(mbody)
+
+                # list
+                objs = Blobs.list(container; credentials, require_ssl_verification=false)
+                @test length(objs) == 4
+                @test map(x -> x.key, objs) == ["test.csv", "test2.csv", "test3.csv", "test4.csv"]
+                objs = Blobs.list(container; maxKeys=1, credentials, require_ssl_verification=false)
+                @test length(objs) == 4
+                @test map(x -> x.key, objs) == ["test.csv", "test2.csv", "test3.csv", "test4.csv"]
+
+                # delete
+                Blobs.delete(container, "test.csv"; credentials, require_ssl_verification=false)
+                Blobs.delete(container, "test2.csv"; credentials, require_ssl_verification=false)
+                Blobs.delete(container, "test3.csv"; credentials, require_ssl_verification=false)
+                Blobs.delete(container, "test4.csv"; credentials, require_ssl_verification=false)
+
+                objs = Blobs.list(container; credentials, require_ssl_verification=false)
+                @test length(objs) == 0
             end
         end
     end
