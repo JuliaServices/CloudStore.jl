@@ -1,5 +1,5 @@
 using Test, CloudStore, CloudBase.CloudTest
-import CloudStore: S3, Azure
+import CloudStore: S3, Blobs
 
 bytes(x) = codeunits(x)
 
@@ -11,23 +11,6 @@ function stringfile(x)
 end
 
 iobuffer(x) = IOBuffer(x)
-
-struct TempFile <: IO
-    path
-    io
-end
-TempFile() = TempFile(mktemp()...)
-Base.close(x::TempFile) = close(x.io)
-Base.unsafe_write(x::TempFile, p::Ptr{UInt8}, n::UInt) = Base.unsafe_write(x.io, p, n)
-Base.write(x::TempFile, y::AbstractString) = write(x.io, y)
-Base.write(x::TempFile, y::Union{SubString{String}, String}) = write(x.io, y)
-Base.unsafe_read(x::TempFile, p::Ptr{UInt8}, n::UInt) = Base.unsafe_read(x.path, p, n)
-Base.readbytes!(s::TempFile, b::AbstractArray{UInt8}, nb=length(b)) = readbytes!(s.io, b, nb)
-Base.eof(x::TempFile) = eof(x.io)
-Base.bytesavailable(x::TempFile) = bytesavailable(x.io)
-Base.read(x::TempFile, ::Type{UInt8}) = read(x.io, UInt8)
-Base.seekstart(x::TempFile) = seekstart(x.io)
-Base.rm(x::TempFile) = rm(x.path)
 
 function iofile(x)
     io = TempFile()
@@ -60,7 +43,7 @@ check(x, y) = begin; reset!(x); reset!(y); z = read(x) == read(y); reset!(x); re
 @time @testset "S3" begin
     # conf, p = Minio.run(; debug=true)
     Minio.with(; debug=true) do conf
-        account, bucket = conf
+        credentials, bucket = conf
         csv = "a,b,c\n1,2,3\n4,5,$(rand())"
         multicsv = "1,2,3,4,5,6,7,8,9,1\n"^1000000; # 20MB
         for inBody in (bytes, stringfile, iobuffer, iofile)
@@ -68,32 +51,77 @@ check(x, y) = begin; reset!(x); reset!(y); z = read(x) == read(y); reset!(x); re
                 body = inBody(csv)
                 out = outType(outBody)
                 println("in: $inBody, out: $outBody, single part, no compression")
-                obj = S3.put(bucket, "test.csv", body; account)
-                data = S3.get(bucket, "test.csv", out; account)
+                obj = S3.put(bucket, "test.csv", body; credentials)
+                data = S3.get(bucket, "test.csv", out; credentials)
                 @test check(body, data)
                 resetOut!(out)
                 # get on Object
-                data = S3.get(obj, out; account)
+                data = S3.get(obj, out; credentials)
                 @test check(body, data)
                 resetOut!(out)
-                
+
                 println("in: $inBody, out: $outBody, single part, compression")
-                obj = S3.put(bucket, "test2.csv", body; compress=true, account)
-                data = S3.get(bucket, "test2.csv", out; decompress=true, account)
+                obj = S3.put(bucket, "test2.csv", body; compress=true, credentials)
+                data = S3.get(bucket, "test2.csv", out; decompress=true, credentials)
                 @test check(body, data)
                 resetOut!(out)
                 cleanup!(body)
-                
+
                 mbody = inBody(multicsv);
                 out = outType(outBody)
                 println("in: $inBody, out: $outBody, multipart, no compression")
-                obj = S3.put(bucket, "test3.csv", mbody; multipartThreshold=5_000_000, multipartSize=5_500_000, account)
-                data = S3.get(bucket, "test3.csv", out; account)
+                obj = S3.put(bucket, "test3.csv", mbody; multipartThreshold=5_000_000, multipartSize=5_500_000, credentials)
+                data = S3.get(bucket, "test3.csv", out; credentials)
                 @test check(mbody, data)
                 resetOut!(out)
                 println("in: $inBody, out: $outBody, multipart, compression")
-                obj = S3.put(bucket, "test4.csv", mbody; compress=true, multipartThreshold=5_000_000, multipartSize=5_500_000, account)
-                data = S3.get(bucket, "test4.csv", out; decompress=true, account)
+                obj = S3.put(bucket, "test4.csv", mbody; compress=true, multipartThreshold=5_000_000, multipartSize=5_500_000, credentials)
+                data = S3.get(bucket, "test4.csv", out; decompress=true, credentials)
+                @test check(mbody, data)
+                resetOut!(out)
+                cleanup!(mbody)
+            end
+        end
+    end
+end
+
+@time @testset "Blobs" begin
+    # conf, p = Azurite.run(; debug=true)
+    Azurite.with(; debug=true) do conf
+        credentials, bucket = conf
+        csv = "a,b,c\n1,2,3\n4,5,$(rand())"
+        multicsv = "1,2,3,4,5,6,7,8,9,1\n"^1000000; # 20MB
+        for inBody in (bytes, stringfile, iobuffer, iofile)
+            for outBody in (Vector{UInt8}, String, IO)
+                body = inBody(csv)
+                out = outType(outBody)
+                println("in: $inBody, out: $outBody, single part, no compression")
+                obj = Blobs.put(bucket, "test.csv", body; credentials, require_ssl_verification=false)
+                data = Blobs.get(bucket, "test.csv", out; credentials, require_ssl_verification=false)
+                @test check(body, data)
+                resetOut!(out)
+                # get on Object
+                data = Blobs.get(obj, out; credentials, require_ssl_verification=false)
+                @test check(body, data)
+                resetOut!(out)
+
+                println("in: $inBody, out: $outBody, single part, compression")
+                obj = Blobs.put(bucket, "test2.csv", body; compress=true, credentials, require_ssl_verification=false)
+                data = Blobs.get(bucket, "test2.csv", out; decompress=true, credentials, require_ssl_verification=false)
+                @test check(body, data)
+                resetOut!(out)
+                cleanup!(body)
+
+                mbody = inBody(multicsv);
+                out = outType(outBody)
+                println("in: $inBody, out: $outBody, multipart, no compression")
+                obj = Blobs.put(bucket, "test3.csv", mbody; multipartThreshold=5_000_000, multipartSize=5_500_000, credentials, require_ssl_verification=false)
+                data = Blobs.get(bucket, "test3.csv", out; credentials, require_ssl_verification=false)
+                @test check(mbody, data)
+                resetOut!(out)
+                println("in: $inBody, out: $outBody, multipart, compression")
+                obj = Blobs.put(bucket, "test4.csv", mbody; compress=true, multipartThreshold=5_000_000, multipartSize=5_500_000, credentials, require_ssl_verification=false)
+                data = Blobs.get(bucket, "test4.csv", out; decompress=true, credentials, require_ssl_verification=false)
                 @test check(mbody, data)
                 resetOut!(out)
                 cleanup!(mbody)
