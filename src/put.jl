@@ -32,7 +32,7 @@ function prepBodyMultipart(x::RequestBodyType, compress::Bool)
     return compress ? GzipCompressorStream(body) : body
 end
 
-function putObject(mod, x::AbstractStore, key::String, in::RequestBodyType;
+function putObjectImpl(x::AbstractStore, key::String, in::RequestBodyType;
     multipartThreshold::Int=64_000_000,
     partSize::Int=16_000_000,
     batchSize::Int=defaultBatchSize(),
@@ -42,12 +42,12 @@ function putObject(mod, x::AbstractStore, key::String, in::RequestBodyType;
     N = nbytes(in)
     if N <= multipartThreshold || !allowMultipart
         body = prepBody(in, compress)
-        resp = mod.putObjectSingle(x, key, body; kw...)
+        resp = putObject(x, key, body; kw...)
         return Object(x, key, "", etag(HTTP.header(resp, "ETag")), N, "")
     end
     # multipart upload
-    uploadState = mod.startMultipartUpload(x, key; kw...)
-    url = joinpath(x.baseurl, key)
+    uploadState = startMultipartUpload(x, key; kw...)
+    url = makeURL(x, key)
     eTags = String[]
     sync = OrderedSynchronizer(1)
     body = prepBodyMultipart(in, compress)
@@ -65,7 +65,7 @@ function putObject(mod, x::AbstractStore, key::String, in::RequestBodyType;
             part = read(body, partSize)
             let n=n, part=part
                 Threads.@spawn begin
-                    eTag = mod.uploadPart(url, part, n, uploadState; kw...)
+                    eTag = uploadPart(x, url, part, n, uploadState; kw...)
                     let eTag=eTag
                         # we synchronize the eTags here because the order matters
                         # for the final call to completeMultipartUpload
@@ -85,6 +85,6 @@ function putObject(mod, x::AbstractStore, key::String, in::RequestBodyType;
     end
     # println("closing multipart")
     # @show eTags
-    eTag = mod.completeMultipartUpload(url, eTags, uploadState; kw...)
+    eTag = completeMultipartUpload(x, url, eTags, uploadState; kw...)
     return Object(x, key, "", eTag, N, "")
 end
