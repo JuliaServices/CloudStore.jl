@@ -65,10 +65,11 @@ function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType;
                     n = (j - 1) * batchSize + i
                     n > nTasks && break
                     let n=n
+                        @show n
                         Threads.@spawn begin
                             rng = contentRange(((n - 1) * partSize + eoff + 1):min(total, (n * partSize) + eoff))
                             #TODO: in HTTP.jl, allow passing res as response_stream that we write to directly
-                            resp = getObject(x, url, rng, kw...)
+                            resp = getObject(x, url, rng; kw...)
                             #TODO: verify Last-Modified in resp matches from 1st response?
                             #TODO: do If-Match eTag w/ AWS?
                             #TODO: pass generation for each GCP request?

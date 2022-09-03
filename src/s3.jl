@@ -39,7 +39,7 @@ function API.getObject(x::Bucket, url, rng; kw...)
     if rng === nothing
         return AWS.get(url; service="s3", kw...)
     else
-        return AWS.get(url, [rng]; service="s3", kw...)
+        return AWS.get(url, [rng, "x-amz-checksum-mode" => "ENABLED"]; service="s3", kw...)
     end
 end
 
