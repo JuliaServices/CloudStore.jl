@@ -18,7 +18,7 @@ CodecZlib = "0.7"
 HTTP = "1"
 WorkerUtilities = "1.1"
 XMLDict = "0.4"
-julia = "1.6"
+julia = "1.7"
 
 [extras]
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
