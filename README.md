@@ -7,7 +7,7 @@
 [![version](https://juliahub.com/docs/CloudStore/version.svg)](https://juliahub.com/ui/Packages/CloudStore/HHBkp)
 [![pkgeval](https://juliahub.com/docs/CloudStore/pkgeval.svg)](https://juliahub.com/ui/Packages/CloudStore/HHBkp)
 
-*A simple, yet comprehensive foundation for interacting with common cloud providers in Julia (GCP, Azure, AWS)*
+*A simple, consistent, and performant API for interacting with common cloud storage abstractions in Julia (GCP, Azure Blob Storage, AWS S3)*
 
 ## Installation
 
