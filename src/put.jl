@@ -32,9 +32,20 @@ function prepBodyMultipart(x::RequestBodyType, compress::Bool)
     return compress ? GzipCompressorStream(body) : body
 end
 
+_read(body, n) = read(body, n)
+
+function _read(body::IOBuffer, n)
+    if body.ptr + n > body.size
+        n = body.size - body.ptr + 1
+    end
+    res = @view body.data[body.ptr:body.ptr + n - 1]
+    body.ptr += n
+    return res
+end
+
 function putObjectImpl(x::AbstractStore, key::String, in::RequestBodyType;
-    multipartThreshold::Int=64_000_000,
-    partSize::Int=16_000_000,
+    multipartThreshold::Int=MULTIPART_THRESHOLD,
+    partSize::Int=MULTIPART_SIZE,
     batchSize::Int=defaultBatchSize(),
     allowMultipart::Bool=true,
     compress::Bool=false, kw...)
@@ -60,9 +71,7 @@ function putObjectImpl(x::AbstractStore, key::String, in::RequestBodyType;
         @sync for i = 1:batchSize
             eof(body) && break
             n = (j - 1) * batchSize + i
-            #TODO: we should avoid the extra copies when the input is a Vector{UInt8}
-            # currently we wrap it in IOBuffer and then call a plain read on it
-            part = read(body, partSize)
+            part = _read(body, partSize)
             let n=n, part=part
                 Threads.@spawn begin
                     eTag = uploadPart(x, url, part, n, uploadState; kw...)
@@ -83,8 +92,6 @@ function putObjectImpl(x::AbstractStore, key::String, in::RequestBodyType;
     if in isa String
         close(body)
     end
-    # println("closing multipart")
-    # @show eTags
     eTag = completeMultipartUpload(x, url, eTags, uploadState; kw...)
     return Object(x, key, "", eTag, N, "")
 end

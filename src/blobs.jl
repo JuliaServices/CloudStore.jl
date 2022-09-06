@@ -26,13 +26,7 @@ end
 
 list(x::Container; kw...) = API.listObjectsImpl(x; kw...)
 
-function API.getObject(x::Container, url, rng; kw...)
-    if rng === nothing
-        return Azure.get(url; kw...)
-    else
-        return Azure.get(url, [rng]; kw...)
-    end
-end
+API.getObject(x::Container, url, headers; kw...) = Azure.get(url, headers; kw...)
 
 get(x::Object, args...; kw...) = get(x.store, x.key, args...; kw...)
 get(args...; kw...) = API.getObjectImpl(args...; kw...)

@@ -1,10 +1,12 @@
 # list
-function listObjectsImpl(x::AbstractStore; prefix="", maxKeys=maxListKeys(x), kw...)
+function listObjectsImpl(x::AbstractStore;
+    prefix::String="",
+    maxKeys=maxListKeys(x),
+    query=Dict{String, String}(), kw...)
     if maxKeys > maxListKeys(x)
         @warn "$(cloudName(x)) only supports $(maxListKeys(x)) keys per request: `$maxKeys` requested"
         maxKeys = maxListKeys(x)
     end
-    query = Dict{String, String}()
     if !isempty(prefix)
         query["prefix"] = prefix
     end
@@ -34,22 +36,25 @@ function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType;
     partSize::Int=MULTIPART_SIZE,
     batchSize::Int=defaultBatchSize(),
     allowMultipart::Bool=true,
-    decompress::Bool=false, kw...)
+    decompress::Bool=false,
+    headers=HTTP.Headers(), kw...)
 
     url = makeURL(x, key)
-    rng = allowMultipart ? contentRange(0:(multipartThreshold - 1)) : nothing
+    if allowMultipart
+        HTTP.setheader(headers, contentRange(0:(multipartThreshold - 1)))
+    end
     if out === nothing
-        resp = getObject(x, url, rng; kw...)
+        resp = getObject(x, url, headers; kw...)
         res = resp.body
     elseif out isa String
         res = open(out, "w")
         if decompress
             res = GzipDecompressorStream(res)
         end
-        resp = getObject(x, url, rng; response_stream=res, kw...)
+        resp = getObject(x, url, headers; response_stream=res, kw...)
     else
         res = decompress ? GzipDecompressorStream(out) : out
-        resp = getObject(x, url, rng; response_stream=res, kw...)
+        resp = getObject(x, url, headers; response_stream=res, kw...)
     end
     if allowMultipart
         soff, eoff, total = parseContentRange(HTTP.header(resp, "Content-Range"))
@@ -64,25 +69,20 @@ function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType;
                 @sync for i = 1:batchSize
                     n = (j - 1) * batchSize + i
                     n > nTasks && break
-                    let n=n
-                        @show n
+                    let n=n, headers=copy(headers)
                         Threads.@spawn begin
                             rng = contentRange(((n - 1) * partSize + eoff + 1):min(total, (n * partSize) + eoff))
+                            HTTP.setheader(headers, rng)
                             #TODO: in HTTP.jl, allow passing res as response_stream that we write to directly
-                            resp = getObject(x, url, rng; kw...)
-                            #TODO: verify Last-Modified in resp matches from 1st response?
-                            #TODO: do If-Match eTag w/ AWS?
-                            #TODO: pass generation for each GCP request?
-                            let resp=resp
-                                if res isa Vector{UInt8}
-                                    off, off2, _ = parseContentRange(HTTP.header(resp, "Content-Range"))
-                                    put!(sync, n) do
-                                        copyto!(res, off + 1, resp.body, 1, off2 - off + 1)
-                                    end
-                                else
-                                    put!(sync, n) do
-                                        write(res, resp.body)
-                                    end
+                            r = getObject(x, url, headers; kw...)
+                            if res isa Vector{UInt8}
+                                off, off2, _ = parseContentRange(HTTP.header(r, "Content-Range"))
+                                put!(sync, n) do
+                                    copyto!(res, off + 1, r.body, 1, off2 - off + 1)
+                                end
+                            else
+                                put!(sync, n) do
+                                    write(res, r.body)
                                 end
                             end
                         end
