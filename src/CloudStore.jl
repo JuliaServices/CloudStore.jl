@@ -12,8 +12,12 @@ using HTTP, CodecZlib, Mmap
 import WorkerUtilities: OrderedSynchronizer
 import CloudBase: AbstractStore
 
-const MULTIPART_THRESHOLD = 64_000_000
-const MULTIPART_SIZE = 16_000_000
+"""
+Controls the automatic use of concurrency when downloading/uploading.
+  * Downloading: the size of the initial content range requested; if 
+"""
+const MULTIPART_THRESHOLD = 2^23 # 8MB
+const MULTIPART_SIZE = 2^23
 
 defaultBatchSize() = 4 * Threads.nthreads()
 
