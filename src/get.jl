@@ -44,17 +44,17 @@ function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType;
         HTTP.setheader(headers, contentRange(0:(multipartThreshold - 1)))
     end
     if out === nothing
-        resp = getObject(x, url, headers; kw...)
+        resp = getObject(x, url, headers; connection_limit=batchSize, kw...)
         res = resp.body
     elseif out isa String
         res = open(out, "w")
         if decompress
             res = GzipDecompressorStream(res)
         end
-        resp = getObject(x, url, headers; response_stream=res, kw...)
+        resp = getObject(x, url, headers; response_stream=res, connection_limit=batchSize, kw...)
     else
         res = decompress ? GzipDecompressorStream(out) : out
-        resp = getObject(x, url, headers; response_stream=res, kw...)
+        resp = getObject(x, url, headers; response_stream=res, connection_limit=batchSize, kw...)
     end
     if allowMultipart
         soff, eoff, total = parseContentRange(HTTP.header(resp, "Content-Range"))
@@ -74,7 +74,7 @@ function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType;
                             rng = contentRange(((n - 1) * partSize + eoff + 1):min(total, (n * partSize) + eoff))
                             HTTP.setheader(headers, rng)
                             #TODO: in HTTP.jl, allow passing res as response_stream that we write to directly
-                            r = getObject(x, url, headers; kw...)
+                            r = getObject(x, url, headers; connection_limit=batchSize, kw...)
                             if res isa Vector{UInt8}
                                 off, off2, _ = parseContentRange(HTTP.header(r, "Content-Range"))
                                 put!(sync, n) do
