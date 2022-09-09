@@ -121,26 +121,26 @@ end
                 body = inBody(csv)
                 out = outType(outBody)
                 println("in: $inBody, out: $outBody, single part, no compression")
-                obj = Blobs.put(container, "test.csv", body; credentials, require_ssl_verification=false)
-                data = Blobs.get(container, "test.csv", out; credentials, require_ssl_verification=false)
+                obj = Blobs.put(container, "test.csv", body; credentials)
+                data = Blobs.get(container, "test.csv", out; credentials)
                 @test check(body, data)
                 resetOut!(out)
                 # get on Object
-                data = Blobs.get(obj, out; credentials, require_ssl_verification=false)
+                data = Blobs.get(obj, out; credentials)
                 @test check(body, data)
                 resetOut!(out)
                 # object metadata
-                meta = Blobs.head(container, "test.csv"; credentials, require_ssl_verification=false)
+                meta = Blobs.head(container, "test.csv"; credentials)
                 @test meta isa Dict && !isempty(meta)
 
                 # list
-                objs = Blobs.list(container; credentials, require_ssl_verification=false)
+                objs = Blobs.list(container; credentials)
                 @test length(objs) == 1
                 @test objs[1].key == "test.csv"
 
                 println("in: $inBody, out: $outBody, single part, compression")
-                obj = Blobs.put(container, "test2.csv", body; compress=true, credentials, require_ssl_verification=false)
-                data = Blobs.get(container, "test2.csv", out; decompress=true, credentials, require_ssl_verification=false)
+                obj = Blobs.put(container, "test2.csv", body; compress=true, credentials)
+                data = Blobs.get(container, "test2.csv", out; decompress=true, credentials)
                 @test check(body, data)
                 resetOut!(out)
                 cleanup!(body)
@@ -148,32 +148,32 @@ end
                 mbody = inBody(multicsv);
                 out = outType(outBody)
                 println("in: $inBody, out: $outBody, multipart, no compression")
-                obj = Blobs.put(container, "test3.csv", mbody; multipartThreshold=5_000_000, partSize=5_500_000, credentials, require_ssl_verification=false)
-                data = Blobs.get(container, "test3.csv", out; credentials, require_ssl_verification=false)
+                obj = Blobs.put(container, "test3.csv", mbody; multipartThreshold=5_000_000, partSize=5_500_000, credentials)
+                data = Blobs.get(container, "test3.csv", out; credentials)
                 @test check(mbody, data)
                 resetOut!(out)
                 println("in: $inBody, out: $outBody, multipart, compression")
-                obj = Blobs.put(container, "test4.csv", mbody; compress=true, multipartThreshold=5_000_000, partSize=5_500_000, credentials, require_ssl_verification=false)
-                data = Blobs.get(container, "test4.csv", out; decompress=true, credentials, require_ssl_verification=false)
+                obj = Blobs.put(container, "test4.csv", mbody; compress=true, multipartThreshold=5_000_000, partSize=5_500_000, credentials)
+                data = Blobs.get(container, "test4.csv", out; decompress=true, credentials)
                 @test check(mbody, data)
                 resetOut!(out)
                 cleanup!(mbody)
 
                 # list
-                objs = Blobs.list(container; credentials, require_ssl_verification=false)
+                objs = Blobs.list(container; credentials)
                 @test length(objs) == 4
                 @test map(x -> x.key, objs) == ["test.csv", "test2.csv", "test3.csv", "test4.csv"]
-                objs = Blobs.list(container; maxKeys=1, credentials, require_ssl_verification=false)
+                objs = Blobs.list(container; maxKeys=1, credentials)
                 @test length(objs) == 4
                 @test map(x -> x.key, objs) == ["test.csv", "test2.csv", "test3.csv", "test4.csv"]
 
                 # delete
-                Blobs.delete(container, "test.csv"; credentials, require_ssl_verification=false)
-                Blobs.delete(container, "test2.csv"; credentials, require_ssl_verification=false)
-                Blobs.delete(container, "test3.csv"; credentials, require_ssl_verification=false)
-                Blobs.delete(container, "test4.csv"; credentials, require_ssl_verification=false)
+                Blobs.delete(container, "test.csv"; credentials)
+                Blobs.delete(container, "test2.csv"; credentials)
+                Blobs.delete(container, "test3.csv"; credentials)
+                Blobs.delete(container, "test4.csv"; credentials)
 
-                objs = Blobs.list(container; credentials, require_ssl_verification=false)
+                objs = Blobs.list(container; credentials)
                 @test length(objs) == 0
             end
         end

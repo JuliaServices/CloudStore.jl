@@ -31,7 +31,7 @@ function parseContentRange(str)
     return (parse(Int, m[1]), parse(Int, m[2]), parse(Int, m[3]))
 end
 
-function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType;
+function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType=nothing;
     multipartThreshold::Int=MULTIPART_THRESHOLD,
     partSize::Int=MULTIPART_SIZE,
     batchSize::Int=defaultBatchSize(),
