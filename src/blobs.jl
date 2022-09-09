@@ -2,6 +2,7 @@ module Blobs
 
 using CloudBase.Azure, XMLDict, HTTP, CodecZlib, Base64
 using ..API
+import ..parseAzureAccountContainerBlob
 
 const Container = Azure.Container
 
@@ -55,5 +56,17 @@ end
 
 delete(x::Container, key::String; kw...) = Azure.delete(joinpath(x.baseurl, key); kw...)
 delete(x::Object; kw...) = delete(x.store, x.key; kw...)
+
+for func in (:list, :get, :head, :put, :delete)
+    @eval function $func(url::String, args...; kw...)
+        ok, host, account, container, blob = parseAzureAccountContainerBlob(url; parseLocal=true)
+        ok || throw(ArgumentError("invalid url for Blobs.$($func): `$url`"))
+        if blob !== nothing
+            return $func(Azure.Container(container, account; host), blob, args...; kw...)
+        else
+            return $func(Azure.Container(container, account; host), args...; kw...)
+        end
+    end
+end
 
 end # module Blobs

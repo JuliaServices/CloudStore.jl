@@ -56,10 +56,6 @@ end # module API
 
 using .API
 
-# cloud-specific API implementations
-include("s3.jl")
-include("blobs.jl")
-
 # generic dispatches
 get(x::Object, out::ResponseBodyType=nothing; kw...) = get(x.store, x.key, out; kw...)
 head(x::Object; kw...) = head(x.store, x.key; kw...)
@@ -80,15 +76,20 @@ put(x::Azure.Container, key::String, in::RequestBodyType; kw...) = Blobs.put(x, 
 delete(x::Azure.Container, key::String; kw...) = Blobs.delete(x, key; kw...)
 
 # try to parse cloud-specific url schemes and dispatch
-function parseAzureAccountContainerBlob(url)
+function parseAzureAccountContainerBlob(url; parseLocal::Bool=false)
     # https://myaccount.blob.core.windows.net/mycontainer/myblob
     # https://myaccount.blob.core.windows.net/mycontainer
     m = match(r"^https://(?<account>[^\.]+)\.blob\.core\.windows\.net/(?<container>[^/]+)(?:/(?<blob>.+))?$", url)
-    m !== nothing && return (true, String(m[:account]), String(m[:container]), String(something(m[:blob], "")))
-    return (false, "", "", "")
+    m !== nothing && return (true, nothing, String(m[:account]), String(m[:container]), String(something(m[:blob], "")))
+    if parseLocal
+        # "https://127.0.0.1:45942/devstoreaccount1/jl-azurite-21807/"
+        m = match(r"^(?<host>https://.+?)/(?<account>.+?)/(?<container>.+?)(?:/(?<blob>.+))?$", url)
+        m !== nothing && return (true, String(m[:host]), String(m[:account]), String(m[:container]), String(something(m[:blob], "")))
+    end
+    return (false, nothing, "", "", "")
 end
 
-function parseAWSBucketRegionKey(url)
+function parseAWSBucketRegionKey(url; parseLocal::Bool=false)
     # https://bucket-name.s3-accelerate.region-code.amazonaws.com/key-name
     # https://bucket-name.s3-accelerate.region-code.amazonaws.com
     # https://bucket-name.s3-accelerate.amazonaws.com/key-name
@@ -98,16 +99,21 @@ function parseAWSBucketRegionKey(url)
     # https://bucket-name.s3.amazonaws.com/key-name
     # https://bucket-name.s3.amazonaws.com
     m = match(r"^https://(?<bucket>[^\.]+)\.s3(?<accelerate>-accelerate)?(?:\.(?<region>[^\.]+))?\.amazonaws\.com(?:/(?<key>.+))?$", url)
-    m !== nothing && return (true, !isnothing(m[:accelerate]), String(m[:bucket]), String(something(m[:region], "")), String(something(m[:key], "")))
+    m !== nothing && return (true, !isnothing(m[:accelerate]), nothing, String(m[:bucket]), String(something(m[:region], "")), String(something(m[:key], "")))
     # https://s3.region-code.amazonaws.com/bucket-name/key-name
     # https://s3.region-code.amazonaws.com/bucket-name
     m = match(r"^https://s3\.(?<region>[^\.]+)\.amazonaws\.com/(?<bucket>[^/]+)(?:/(?<key>.+))?$", url)
-    m !== nothing && return (true, false, String(m[:bucket]), String(something(m[:region], "")), String(something(m[:key], "")))
+    m !== nothing && return (true, false, nothing, String(m[:bucket]), String(something(m[:region], "")), String(something(m[:key], "")))
     # S3://bucket-name/key-name
     # S3://bucket-name
     m = match(r"^s3://(?<bucket>[^/]+)(?:/(?<key>.+))?$"i, url)
-    m !== nothing && return (true, false, String(m[:bucket]), "", String(something(m[:key], "")))
-    return (false, false, "", "", "")
+    m !== nothing && return (true, false, nothing, String(m[:bucket]), "", String(something(m[:key], "")))
+    if parseLocal
+        # "http://127.0.0.1:27181/jl-minio-4483/"
+        m = match(r"^(?<host>http://.+?)/(?<bucket>.+?)(?:/(?<key>.+))?$", url)
+        m !== nothing && return (true, false, String(m[:host]), String(m[:bucket]), "", String(something(m[:key], "")))
+    end
+    return (false, false, nothing, "", "", "")
 end
 
 function parseGCPBucketObject(url)
@@ -128,15 +134,15 @@ end
 
 function parseURLForDispatch(url, region, nowarn)
     # try to parse cloud-specific url schemes and dispatch
-    ok, accelerate, bucket, reg, key = parseAWSBucketRegionKey(url)
+    ok, accelerate, host, bucket, reg, key = parseAWSBucketRegionKey(url)
     region = isempty(reg) ? region : reg
-    if region === nothing
+    if ok && region === nothing
         nowarn || @warn "`region` keyword argument not provided to `CloudStore.get` and undetected from url.  Defaulting to `us-east-1`"
         region = AWS.AWS_DEFAULT_REGION
     end
-    ok && return (AWS.Bucket(bucket, region; accelerate), key)
-    ok, account, container, blob = parseAzureAccountContainerBlob(url)
-    ok && return (Azure.Container(container, account), blob)
+    ok && return (AWS.Bucket(bucket, region; accelerate, host), key)
+    ok, host, account, container, blob = parseAzureAccountContainerBlob(url)
+    ok && return (Azure.Container(container, account; host), blob)
     # ok, bucket, object = parseGCPBucketObject(url)
     # ok && return (GCP.Bucket(bucket), object)
     error("couldn't determine cloud from string url: `$url`")
@@ -166,5 +172,9 @@ function list(url::String; region=nothing, nowarn::Bool=false, kw...)
     store, _ = parseURLForDispatch(url, region, nowarn)
     return list(store; kw...)
 end
+
+# cloud-specific API implementations
+include("s3.jl")
+include("blobs.jl")
 
 end # module CloudStore

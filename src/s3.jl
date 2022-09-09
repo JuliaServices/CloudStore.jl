@@ -2,20 +2,11 @@ module S3
 
 using CloudBase.AWS, XMLDict, HTTP, CodecZlib
 using ..API
+import ..parseAWSBucketRegionKey
 
 const Bucket = AWS.Bucket
 
 API.cloudName(::Bucket) = "S3"
-
-# function list(; baseurl::String="https://s3.amazonaws.com/", credentials::Union{Nothing, AWS.Credentials}=nothing, verbose=0)
-#     result = xml_dict(String(AWS.get(baseurl; credentials, verbose).body))["ListAllMyBucketsResult"]
-#     #TODO: we're not getting the region right the buckets here; should we call the get region endpoint?
-#     return [Bucket(x["Name"]) for x in result["Buckets"]["Bucket"]]
-# end
-
-# function create(x::Bucket; credentials::Union{Nothing, AWS.Credentials}=nothing, verbose=0)
-#     AWS.put(x.baseurl; credentials, verbose)
-# end
 
 object(b::Bucket, x) = Object(b, x["Key"], x["LastModified"], API.etag(x["ETag"]), parse(Int, x["Size"]), x["StorageClass"])
 
@@ -66,5 +57,21 @@ end
 
 delete(x::Bucket, key; kw...) = AWS.delete(joinpath(x.baseurl, key); service="s3", kw...)
 delete(x::Object; kw...) = delete(x.store, x.key; kw...)
+
+for func in (:list, :get, :head, :put, :delete)
+    @eval function $func(url::String, args...; region=nothing, nowarn::Bool=false, kw...)
+        ok, accelerate, host, bucket, reg, key = parseAWSBucketRegionKey(url; parseLocal=true)
+        ok || throw(ArgumentError("invalid url for S3.$($func): `$url`"))
+        if region === nothing
+            nowarn || @warn "`region` keyword argument not provided to `S3.$($func)` and undetected from url.  Defaulting to `us-east-1`"
+            region = AWS.AWS_DEFAULT_REGION
+        end
+        if key !== nothing
+            return $func(S3.Bucket(bucket, region; accelerate, host), key, args...; kw...)
+        else
+            return $func(S3.Bucket(bucket, region; accelerate, host), args...; kw...)
+        end
+    end
+end
 
 end # S3

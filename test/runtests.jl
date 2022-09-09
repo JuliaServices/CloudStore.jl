@@ -73,6 +73,13 @@ check(x, y) = begin; reset!(x); reset!(y); z = read(x) == read(y); reset!(x); re
                 data = S3.get(bucket, "test2.csv", out; decompress=true, credentials)
                 @test check(body, data)
                 resetOut!(out)
+
+                # passing urls directly
+                url = "$(bucket.baseurl)test5.csv"
+                obj = S3.put(url, body; credentials)
+                data = S3.get(url, out; credentials)
+                @test check(body, data)
+                resetOut!(out)
                 cleanup!(body)
 
                 mbody = inBody(multicsv);
@@ -91,17 +98,18 @@ check(x, y) = begin; reset!(x); reset!(y); z = read(x) == read(y); reset!(x); re
 
                 # list
                 objs = S3.list(bucket; credentials)
-                @test length(objs) == 4
-                @test map(x -> x.key, objs) == ["test.csv", "test2.csv", "test3.csv", "test4.csv"]
+                @test length(objs) == 5
+                @test map(x -> x.key, objs) == ["test.csv", "test2.csv", "test3.csv", "test4.csv", "test5.csv"]
                 objs = S3.list(bucket; maxKeys=1, credentials)
-                @test length(objs) == 4
-                @test map(x -> x.key, objs) == ["test.csv", "test2.csv", "test3.csv", "test4.csv"]
+                @test length(objs) == 5
+                @test map(x -> x.key, objs) == ["test.csv", "test2.csv", "test3.csv", "test4.csv", "test5.csv"]
 
                 # delete
                 S3.delete(bucket, "test.csv"; credentials)
                 S3.delete(bucket, "test2.csv"; credentials)
                 S3.delete(bucket, "test3.csv"; credentials)
                 S3.delete(bucket, "test4.csv"; credentials)
+                S3.delete(bucket, "test5.csv"; credentials)
                 
                 objs = S3.list(bucket; credentials)
                 @test length(objs) == 0
@@ -143,6 +151,13 @@ end
                 data = Blobs.get(container, "test2.csv", out; decompress=true, credentials)
                 @test check(body, data)
                 resetOut!(out)
+                
+                # passing urls directly
+                url = "$(container.baseurl)test5.csv"
+                obj = Blobs.put(url, body; credentials)
+                data = Blobs.get(url, out; credentials)
+                @test check(body, data)
+                resetOut!(out)
                 cleanup!(body)
 
                 mbody = inBody(multicsv);
@@ -161,17 +176,18 @@ end
 
                 # list
                 objs = Blobs.list(container; credentials)
-                @test length(objs) == 4
-                @test map(x -> x.key, objs) == ["test.csv", "test2.csv", "test3.csv", "test4.csv"]
+                @test length(objs) == 5
+                @test map(x -> x.key, objs) == ["test.csv", "test2.csv", "test3.csv", "test4.csv", "test5.csv"]
                 objs = Blobs.list(container; maxKeys=1, credentials)
-                @test length(objs) == 4
-                @test map(x -> x.key, objs) == ["test.csv", "test2.csv", "test3.csv", "test4.csv"]
+                @test length(objs) == 5
+                @test map(x -> x.key, objs) == ["test.csv", "test2.csv", "test3.csv", "test4.csv", "test5.csv"]
 
                 # delete
                 Blobs.delete(container, "test.csv"; credentials)
                 Blobs.delete(container, "test2.csv"; credentials)
                 Blobs.delete(container, "test3.csv"; credentials)
                 Blobs.delete(container, "test4.csv"; credentials)
+                Blobs.delete(container, "test5.csv"; credentials)
 
                 objs = Blobs.list(container; credentials)
                 @test length(objs) == 0
