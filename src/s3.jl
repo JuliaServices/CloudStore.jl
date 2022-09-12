@@ -59,7 +59,7 @@ delete(x::Bucket, key; kw...) = AWS.delete(joinpath(x.baseurl, key); service="s3
 delete(x::Object; kw...) = delete(x.store, x.key; kw...)
 
 for func in (:list, :get, :head, :put, :delete)
-    @eval function $func(url::String, args...; region=nothing, nowarn::Bool=false, kw...)
+    @eval function $func(url::AbstractString, args...; region=nothing, nowarn::Bool=false, kw...)
         ok, accelerate, host, bucket, reg, key = parseAWSBucketRegionKey(url; parseLocal=true)
         ok || throw(ArgumentError("invalid url for S3.$($func): `$url`"))
         if region === nothing

@@ -77,19 +77,21 @@ delete(x::Azure.Container, key::String; kw...) = Blobs.delete(x, key; kw...)
 
 # try to parse cloud-specific url schemes and dispatch
 function parseAzureAccountContainerBlob(url; parseLocal::Bool=false)
+    url = String(url)
     # https://myaccount.blob.core.windows.net/mycontainer/myblob
     # https://myaccount.blob.core.windows.net/mycontainer
-    m = match(r"^https://(?<account>[^\.]+)\.blob\.core\.windows\.net/(?<container>[^/]+)(?:/(?<blob>.+))?$", url)
+    m = match(r"^(https|azure)://(?<account>[^\.]+)\.blob\.core\.windows\.net/(?<container>[^/]+)(?:/(?<blob>.+))?$", url)
     m !== nothing && return (true, nothing, String(m[:account]), String(m[:container]), String(something(m[:blob], "")))
     if parseLocal
         # "https://127.0.0.1:45942/devstoreaccount1/jl-azurite-21807/"
-        m = match(r"^(?<host>https://.+?)/(?<account>.+?)/(?<container>.+?)(?:/(?<blob>.+))?$", url)
+        m = match(r"^(?<host>(https|azure)://[^/]+)/(?<account>.+?)/(?<container>.+?)(?:/(?<blob>.+))?$", url)
         m !== nothing && return (true, String(m[:host]), String(m[:account]), String(m[:container]), String(something(m[:blob], "")))
     end
     return (false, nothing, "", "", "")
 end
 
 function parseAWSBucketRegionKey(url; parseLocal::Bool=false)
+    url = String(url)
     # https://bucket-name.s3-accelerate.region-code.amazonaws.com/key-name
     # https://bucket-name.s3-accelerate.region-code.amazonaws.com
     # https://bucket-name.s3-accelerate.amazonaws.com/key-name
@@ -110,13 +112,14 @@ function parseAWSBucketRegionKey(url; parseLocal::Bool=false)
     m !== nothing && return (true, false, nothing, String(m[:bucket]), "", String(something(m[:key], "")))
     if parseLocal
         # "http://127.0.0.1:27181/jl-minio-4483/"
-        m = match(r"^(?<host>http://.+?)/(?<bucket>.+?)(?:/(?<key>.+))?$", url)
+        m = match(r"^(?<host>(http|s3)://.+?)/(?<bucket>.+?)(?:/(?<key>.+))?$", url)
         m !== nothing && return (true, false, String(m[:host]), String(m[:bucket]), "", String(something(m[:key], "")))
     end
     return (false, false, nothing, "", "", "")
 end
 
 function parseGCPBucketObject(url)
+    url = String(url)
     # https://storage.googleapis.com/BUCKET_NAME/OBJECT_NAME
     # https://storage.googleapis.com/BUCKET_NAME
     m = match(r"^https://storage\.googleapis\.com/(?<bucket>[^/]+)(?:/(?<key>.+))?$", url)
@@ -148,27 +151,27 @@ function parseURLForDispatch(url, region, nowarn)
     error("couldn't determine cloud from string url: `$url`")
 end
 
-function get(url::String, out::ResponseBodyType=nothing; region=nothing, nowarn::Bool=false, kw...)
+function get(url::AbstractString, out::ResponseBodyType=nothing; region=nothing, nowarn::Bool=false, kw...)
     store, key = parseURLForDispatch(url, region, nowarn)
     return get(store, key, out; kw...)
 end
 
-function head(url::String; region=nothing, nowarn::Bool=false, kw...)
+function head(url::AbstractString; region=nothing, nowarn::Bool=false, kw...)
     store, key = parseURLForDispatch(url, region, nowarn)
     return head(store, key; kw...)
 end
 
-function put(url::String, in::RequestBodyType; region=nothing, nowarn::Bool=false, kw...)
+function put(url::AbstractString, in::RequestBodyType; region=nothing, nowarn::Bool=false, kw...)
     store, key = parseURLForDispatch(url, region, nowarn)
     return put(store, key, in; kw...)
 end
 
-function delete(url::String; region=nothing, nowarn::Bool=false, kw...)
+function delete(url::AbstractString; region=nothing, nowarn::Bool=false, kw...)
     store, key = parseURLForDispatch(url, region, nowarn)
     return delete(store, key; kw...)
 end
 
-function list(url::String; region=nothing, nowarn::Bool=false, kw...)
+function list(url::AbstractString; region=nothing, nowarn::Bool=false, kw...)
     store, _ = parseURLForDispatch(url, region, nowarn)
     return list(store; kw...)
 end
