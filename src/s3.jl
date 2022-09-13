@@ -32,15 +32,15 @@ get(x::Object, out::ResponseBodyType=nothing; kw...) = get(x.store, x.key, out; 
 get(args...; kw...) = API.getObjectImpl(args...; kw...)
 
 head(x::Object; kw...) = head(x.store, x.key; kw...)
-head(x::Bucket, key::String; kw...) = Dict(AWS.head(joinpath(x.baseurl, key); service="s3", kw...).headers)
+head(x::Bucket, key::String; kw...) = Dict(AWS.head(API.makeURL(x, key); service="s3", kw...).headers)
 
 put(args...; kw...) = API.putObjectImpl(args...; kw...)
 put(x::Object; kw...) = put(x.store, x.key; kw...)
 
-API.putObject(x::Bucket, key, body; kw...) = AWS.put(joinpath(x.baseurl, key), [], body; service="s3", kw...)
+API.putObject(x::Bucket, key, body; kw...) = AWS.put(API.makeURL(x, key), [], body; service="s3", kw...)
 
 function API.startMultipartUpload(x::Bucket, key; kw...)
-    resp = AWS.post(joinpath(x.baseurl, key); query=Dict("uploads" => ""), service="s3", retry_non_idempotent=true, kw...)
+    resp = AWS.post(API.makeURL(x, key); query=Dict("uploads" => ""), service="s3", retry_non_idempotent=true, kw...)
     return xml_dict(String(resp.body))["InitiateMultipartUploadResult"]["UploadId"]
 end
 
@@ -55,7 +55,7 @@ function API.completeMultipartUpload(x::Bucket, url, eTags, uploadId; kw...)
     return API.etag(HTTP.header(resp, "ETag"))
 end
 
-delete(x::Bucket, key; kw...) = AWS.delete(joinpath(x.baseurl, key); service="s3", kw...)
+delete(x::Bucket, key; kw...) = AWS.delete(API.makeURL(x, key); service="s3", kw...)
 delete(x::Object; kw...) = delete(x.store, x.key; kw...)
 
 for func in (:list, :get, :head, :put, :delete)

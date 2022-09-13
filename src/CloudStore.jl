@@ -43,7 +43,7 @@ function maxListKeys end
 function listMaxKeysQuery end
 function continuationToken end
 function listObjects end
-makeURL(x::AbstractStore, key) = joinpath(x.baseurl, key)
+makeURL(x::AbstractStore, key) = joinpath(x.baseurl, lstrip(key, '/'))
 function getObject end
 include("get.jl")
 function putObject end

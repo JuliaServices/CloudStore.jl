@@ -33,12 +33,12 @@ get(x::Object, args...; kw...) = get(x.store, x.key, args...; kw...)
 get(args...; kw...) = API.getObjectImpl(args...; kw...)
 
 head(x::Object; kw...) = head(x.store, x.key; kw...)
-head(x::Container, key::String; kw...) = Dict(Azure.get(joinpath(x.baseurl, key); query=Dict("comp" => "metadata"), kw...).headers)
+head(x::Container, key::String; kw...) = Dict(Azure.get(API.makeURL(x, key); query=Dict("comp" => "metadata"), kw...).headers)
 
 put(args...; kw...) = API.putObjectImpl(args...; kw...)
 put(x::Object; kw...) = put(x.store, x.key; kw...)
 
-API.putObject(x::Container, key, body; kw...) = Azure.put(joinpath(x.baseurl, key), ["x-ms-blob-type" => "BlockBlob"], body; kw...)
+API.putObject(x::Container, key, body; kw...) = Azure.put(API.makeURL(x, key), ["x-ms-blob-type" => "BlockBlob"], body; kw...)
 
 API.startMultipartUpload(x::Container, key; kw...) = nothing
 
@@ -54,7 +54,7 @@ function API.completeMultipartUpload(x::Container, url, eTags, uploadId; kw...)
     return API.etag(HTTP.header(resp, "ETag"))
 end
 
-delete(x::Container, key::String; kw...) = Azure.delete(joinpath(x.baseurl, key); kw...)
+delete(x::Container, key::String; kw...) = Azure.delete(API.makeURL(x, key); kw...)
 delete(x::Object; kw...) = delete(x.store, x.key; kw...)
 
 for func in (:list, :get, :head, :put, :delete)

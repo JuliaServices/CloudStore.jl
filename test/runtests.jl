@@ -51,7 +51,7 @@ check(x, y) = begin; reset!(x); reset!(y); z = read(x) == read(y); reset!(x); re
                 body = inBody(csv)
                 out = outType(outBody)
                 println("in: $inBody, out: $outBody, single part, no compression")
-                obj = S3.put(bucket, "test.csv", body; credentials)
+                obj = S3.put(bucket, "path/to/test.csv", body; credentials)
                 data = S3.get(bucket, "test.csv", out; credentials)
                 @test check(body, data)
                 resetOut!(out)
