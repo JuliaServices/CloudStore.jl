@@ -106,15 +106,15 @@ function parseAWSBucketRegionKey(url; parseLocal::Bool=false)
     # https://s3.region-code.amazonaws.com/bucket-name
     m = match(r"^https://s3\.(?<region>[^\.]+)\.amazonaws\.com/(?<bucket>[^/]+)(?:/(?<key>.+))?$", url)
     m !== nothing && return (true, false, nothing, String(m[:bucket]), String(something(m[:region], "")), String(something(m[:key], "")))
+    if parseLocal
+        # "http://127.0.0.1:27181/jl-minio-4483/"
+        m = match(r"^(?<host>(http|s3)://.+?)/(?<bucket>[^/]+?)(?:/(?<key>.+))?$", url)
+        m !== nothing && return (true, false, replace(String(m[:host]), "s3" => "http"; count=1), String(m[:bucket]), "", String(something(m[:key], "")))
+    end
     # S3://bucket-name/key-name
     # S3://bucket-name
     m = match(r"^s3://(?<bucket>[^/]+)(?:/(?<key>.+))?$"i, url)
     m !== nothing && return (true, false, nothing, String(m[:bucket]), "", String(something(m[:key], "")))
-    if parseLocal
-        # "http://127.0.0.1:27181/jl-minio-4483/"
-        m = match(r"^(?<host>(http|s3)://.+?)/(?<bucket>.+?)(?:/(?<key>.+))?$", url)
-        m !== nothing && return (true, false, String(m[:host]), String(m[:bucket]), "", String(something(m[:key], "")))
-    end
     return (false, false, nothing, "", "", "")
 end
 
