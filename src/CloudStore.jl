@@ -80,7 +80,7 @@ function parseAzureAccountContainerBlob(url; parseLocal::Bool=false)
     url = String(url)
     # https://myaccount.blob.core.windows.net/mycontainer/myblob
     # https://myaccount.blob.core.windows.net/mycontainer
-    m = match(r"^(https|azure)://(?<account>[^\.]+)\.blob\.core\.windows\.net/(?<container>[^/]+)(?:/(?<blob>.+))?$", url)
+    m = match(r"^(https|azure)://(?<account>[^\.]+?)(\.blob\.core\.windows\.net)?/(?<container>[^/]+?)(?:/(?<blob>.+))?$", url)
     m !== nothing && return (true, nothing, String(m[:account]), String(m[:container]), String(something(m[:blob], "")))
     if parseLocal
         # "https://127.0.0.1:45942/devstoreaccount1/jl-azurite-21807/"
