@@ -84,8 +84,8 @@ function parseAzureAccountContainerBlob(url; parseLocal::Bool=false)
     m !== nothing && return (true, nothing, String(m[:account]), String(m[:container]), String(something(m[:blob], "")))
     if parseLocal
         # "https://127.0.0.1:45942/devstoreaccount1/jl-azurite-21807/"
-        m = match(r"^(?<host>(https|azure)://[^/]+)/(?<account>.+?)/(?<container>.+?)(?:/(?<blob>.+))?$", url)
-        m !== nothing && return (true, String(m[:host]), String(m[:account]), String(m[:container]), String(something(m[:blob], "")))
+        m = match(r"^(?<host>(https|azure)://[\d|\.|:]+?)/(?<account>[^/]+?)/(?<container>[^/]+?)(?:/(?<blob>.+))?$", url)
+        m !== nothing && return (true, replace(String(m[:host]), "azure" => "https"; count=1), String(m[:account]), String(m[:container]), String(something(m[:blob], "")))
     end
     return (false, nothing, "", "", "")
 end
@@ -104,11 +104,11 @@ function parseAWSBucketRegionKey(url; parseLocal::Bool=false)
     m !== nothing && return (true, !isnothing(m[:accelerate]), nothing, String(m[:bucket]), String(something(m[:region], "")), String(something(m[:key], "")))
     # https://s3.region-code.amazonaws.com/bucket-name/key-name
     # https://s3.region-code.amazonaws.com/bucket-name
-    m = match(r"^https://s3\.(?<region>[^\.]+)\.amazonaws\.com/(?<bucket>[^/]+)(?:/(?<key>.+))?$", url)
+    m = match(r"^https://s3(?:\.(?<region>[^\.]+))?\.amazonaws\.com/(?<bucket>[^/]+)(?:/(?<key>.+))?$", url)
     m !== nothing && return (true, false, nothing, String(m[:bucket]), String(something(m[:region], "")), String(something(m[:key], "")))
     if parseLocal
         # "http://127.0.0.1:27181/jl-minio-4483/"
-        m = match(r"^(?<host>(http|s3)://.+?)/(?<bucket>[^/]+?)(?:/(?<key>.+))?$", url)
+        m = match(r"^(?<host>(http|s3)://[\d|\.|:]+?)/(?<bucket>[^/]+?)(?:/(?<key>.+))?$", url)
         m !== nothing && return (true, false, replace(String(m[:host]), "s3" => "http"; count=1), String(m[:bucket]), "", String(something(m[:key], "")))
     end
     # S3://bucket-name/key-name

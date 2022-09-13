@@ -195,3 +195,55 @@ end
         end
     end
 end
+
+@testset "URL Parsing Unit Tests" begin
+
+    azure = [
+        ("https://myaccount.blob.core.windows.net/mycontainer/myblob", (true, nothing, "myaccount", "mycontainer", "myblob")),
+        ("https://myaccount.blob.core.windows.net/mycontainer", (true, nothing, "myaccount", "mycontainer", "")),
+        ("azure://myaccount.blob.core.windows.net/mycontainer/myblob", (true, nothing, "myaccount", "mycontainer", "myblob")),
+        ("azure://myaccount.blob.core.windows.net/mycontainer", (true, nothing, "myaccount", "mycontainer", "")),
+        ("https://127.0.0.1:45942/myaccount/mycontainer", (true, "https://127.0.0.1:45942", "myaccount", "mycontainer", "")),
+        ("https://127.0.0.1:45942/myaccount/mycontainer/myblob", (true, "https://127.0.0.1:45942", "myaccount", "mycontainer", "myblob")),
+        ("azure://127.0.0.1:45942/myaccount/mycontainer", (true, "https://127.0.0.1:45942", "myaccount", "mycontainer", "")),
+        ("azure://127.0.0.1:45942/myaccount/mycontainer/myblob", (true, "https://127.0.0.1:45942", "myaccount", "mycontainer", "myblob")),
+    ]
+    for (url, parts) in azure
+        ok, host, account, container, blob = CloudStore.parseAzureAccountContainerBlob(url; parseLocal=true)
+        @show url, ok, host, account, container, blob
+        @test ok
+        @test host == parts[2]
+        @test account == parts[3]
+        @test container == parts[4]
+        @test blob == parts[5]
+    end
+
+    s3 = [
+        ("https://bucket-name.s3-accelerate.region-code.amazonaws.com/key-name", (true, true, nothing, "bucket-name", "region-code", "key-name")),
+        ("https://bucket-name.s3-accelerate.region-code.amazonaws.com", (true, true, nothing, "bucket-name", "region-code", "")),
+        ("https://bucket-name.s3-accelerate.amazonaws.com/key-name", (true, true, nothing, "bucket-name", "", "key-name")),
+        ("https://bucket-name.s3-accelerate.amazonaws.com", (true, true, nothing, "bucket-name", "", "")),
+        ("https://bucket-name.s3.region-code.amazonaws.com/key-name", (true, false, nothing, "bucket-name", "region-code", "key-name")),
+        ("https://bucket-name.s3.region-code.amazonaws.com", (true, false, nothing, "bucket-name", "region-code", "")),
+        ("https://bucket-name.s3.amazonaws.com/key-name", (true, false, nothing, "bucket-name", "", "key-name")),
+        ("https://bucket-name.s3.amazonaws.com", (true, false, nothing, "bucket-name", "", "")),
+        ("https://s3.region-code.amazonaws.com/bucket-name/key-name", (true, false, nothing, "bucket-name", "region-code", "key-name")),
+        ("https://s3.region-code.amazonaws.com/bucket-name", (true, false, nothing, "bucket-name", "region-code", "")),
+        ("https://s3.amazonaws.com/bucket-name/key-name", (true, false, nothing, "bucket-name", "", "key-name")),
+        ("https://s3.amazonaws.com/bucket-name", (true, false, nothing, "bucket-name", "", "")),
+        ("s3://bucket-name/key-name", (true, false, nothing, "bucket-name", "", "key-name")),
+        ("s3://bucket-name", (true, false, nothing, "bucket-name", "", "")),
+        ("http://127.0.0.1:27181/bucket-name/key-name", (true, false, "http://127.0.0.1:27181", "bucket-name", "", "key-name")),
+        ("http://127.0.0.1:27181/bucket-name", (true, false, "http://127.0.0.1:27181", "bucket-name", "", "")),
+    ]
+    for (url, parts) in s3
+        ok, accelerate, host, bucket, reg, key = CloudStore.parseAWSBucketRegionKey(url; parseLocal=true)
+        @show url, ok, accelerate, host, bucket, reg, key
+        @test ok
+        @test accelerate == parts[2]
+        @test host == parts[3]
+        @test bucket == parts[4]
+        @test reg == parts[5]
+        @test key == parts[6]
+    end
+end
