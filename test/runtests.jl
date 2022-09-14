@@ -44,6 +44,7 @@ check(x, y) = begin; reset!(x); reset!(y); z = read(x) == read(y); reset!(x); re
     # conf, p = Minio.run(; debug=true)
     Minio.with(; debug=true) do conf
         credentials, bucket = conf
+        empty = ""
         csv = "a,b,c\n1,2,3\n4,5,$(rand())"
         multicsv = "1,2,3,4,5,6,7,8,9,1\n"^1000000; # 20MB
         for inBody in (bytes, stringfile, iobuffer, iofile)
@@ -82,6 +83,14 @@ check(x, y) = begin; reset!(x); reset!(y); z = read(x) == read(y); reset!(x); re
                 resetOut!(out)
                 cleanup!(body)
 
+                # 0 byte file
+                ebody = inBody(empty)
+                obj = S3.put(bucket, "test6.csv", ebody; credentials)
+                data = S3.get(bucket, "test6.csv", out; credentials)
+                @test check(ebody, data)
+                resetOut!(out)
+                cleanup!(ebody)
+
                 mbody = inBody(multicsv);
                 out = outType(outBody)
                 println("in: $inBody, out: $outBody, multipart, no compression")
@@ -98,11 +107,9 @@ check(x, y) = begin; reset!(x); reset!(y); z = read(x) == read(y); reset!(x); re
 
                 # list
                 objs = S3.list(bucket; credentials)
-                @test length(objs) == 5
-                @test map(x -> x.key, objs) == ["test.csv", "test2.csv", "test3.csv", "test4.csv", "test5.csv"]
+                @test map(x -> x.key, objs) == ["test.csv", "test2.csv", "test3.csv", "test4.csv", "test5.csv", "test6.csv"]
                 objs = S3.list(bucket; maxKeys=1, credentials)
-                @test length(objs) == 5
-                @test map(x -> x.key, objs) == ["test.csv", "test2.csv", "test3.csv", "test4.csv", "test5.csv"]
+                @test map(x -> x.key, objs) == ["test.csv", "test2.csv", "test3.csv", "test4.csv", "test5.csv", "test6.csv"]
 
                 # delete
                 S3.delete(bucket, "test.csv"; credentials)
@@ -110,6 +117,7 @@ check(x, y) = begin; reset!(x); reset!(y); z = read(x) == read(y); reset!(x); re
                 S3.delete(bucket, "test3.csv"; credentials)
                 S3.delete(bucket, "test4.csv"; credentials)
                 S3.delete(bucket, "test5.csv"; credentials)
+                S3.delete(bucket, "test6.csv"; credentials)
                 
                 objs = S3.list(bucket; credentials)
                 @test length(objs) == 0
@@ -122,6 +130,7 @@ end
     # conf, p = Azurite.run(; debug=true)
     Azurite.with(; debug=true) do conf
         credentials, container = conf
+        empty = ""
         csv = "a,b,c\n1,2,3\n4,5,$(rand())"
         multicsv = "1,2,3,4,5,6,7,8,9,1\n"^1000000; # 20MB
         for inBody in (bytes, stringfile, iobuffer, iofile)
@@ -151,7 +160,7 @@ end
                 data = Blobs.get(container, "test2.csv", out; decompress=true, credentials)
                 @test check(body, data)
                 resetOut!(out)
-                
+
                 # passing urls directly
                 url = "$(container.baseurl)test5.csv"
                 obj = Blobs.put(url, body; credentials)
@@ -159,6 +168,14 @@ end
                 @test check(body, data)
                 resetOut!(out)
                 cleanup!(body)
+
+                # 0 byte file
+                ebody = inBody(empty)
+                obj = Blobs.put(container, "test6.csv", ebody; credentials)
+                data = Blobs.get(container, "test6.csv", out; credentials)
+                @test check(ebody, data)
+                resetOut!(out)
+                cleanup!(ebody)
 
                 mbody = inBody(multicsv);
                 out = outType(outBody)
@@ -176,11 +193,9 @@ end
 
                 # list
                 objs = Blobs.list(container; credentials)
-                @test length(objs) == 5
-                @test map(x -> x.key, objs) == ["test.csv", "test2.csv", "test3.csv", "test4.csv", "test5.csv"]
+                @test map(x -> x.key, objs) == ["test.csv", "test2.csv", "test3.csv", "test4.csv", "test5.csv", "test6.csv"]
                 objs = Blobs.list(container; maxKeys=1, credentials)
-                @test length(objs) == 5
-                @test map(x -> x.key, objs) == ["test.csv", "test2.csv", "test3.csv", "test4.csv", "test5.csv"]
+                @test map(x -> x.key, objs) == ["test.csv", "test2.csv", "test3.csv", "test4.csv", "test5.csv", "test6.csv"]
 
                 # delete
                 Blobs.delete(container, "test.csv"; credentials)
@@ -188,6 +203,7 @@ end
                 Blobs.delete(container, "test3.csv"; credentials)
                 Blobs.delete(container, "test4.csv"; credentials)
                 Blobs.delete(container, "test5.csv"; credentials)
+                Blobs.delete(container, "test6.csv"; credentials)
 
                 objs = Blobs.list(container; credentials)
                 @test length(objs) == 0
