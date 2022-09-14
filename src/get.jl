@@ -22,6 +22,17 @@ function listObjectsImpl(x::AbstractStore;
     return contents
 end
 
+function headObjectImpl(x::AbstractStore, key::String;
+    multipartThreshold::Int=MULTIPART_THRESHOLD,
+    allowMultipart::Bool=true,
+    headers=HTTP.Headers(), kw...)
+    url = makeURL(x, key)
+    if allowMultipart
+        HTTP.setheader(headers, contentRange(0:(multipartThreshold - 1)))
+    end
+    return Dict(headObject(x, url, headers; kw...).headers)
+end
+
 # Content-Range: bytes 0-9/443
 contentRange(rng) = "Range" => "bytes=$(first(rng))-$(last(rng))"
 
@@ -41,6 +52,19 @@ function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType=noth
 
     url = makeURL(x, key)
     if allowMultipart
+        # make a head request to see if the object happens to be empty
+        # if so, it isn't valid to make a Range bytes request, so we'll short-circuit
+        resp = API.headObject(x, url, headers; kw...)
+        if HTTP.header(resp, "Content-Length") == "0"
+            if out === nothing
+                return resp.body
+            elseif out isa String
+                open(io -> nothing, out, "w")
+                return out
+            else
+                return out
+            end
+        end
         HTTP.setheader(headers, contentRange(0:(multipartThreshold - 1)))
     end
     if out === nothing

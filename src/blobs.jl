@@ -32,8 +32,9 @@ API.getObject(x::Container, url, headers; kw...) = Azure.get(url, headers; kw...
 get(x::Object, args...; kw...) = get(x.store, x.key, args...; kw...)
 get(args...; kw...) = API.getObjectImpl(args...; kw...)
 
+API.headObject(x::Container, url, headers; kw...) = Azure.head(url; headers, kw...)
 head(x::Object; kw...) = head(x.store, x.key; kw...)
-head(x::Container, key::String; kw...) = Dict(Azure.get(API.makeURL(x, key); query=Dict("comp" => "metadata"), kw...).headers)
+head(x::Container, key::String; kw...) = API.headObjectImpl(x, key; kw...)
 
 put(args...; kw...) = API.putObjectImpl(args...; kw...)
 put(x::Object; kw...) = put(x.store, x.key; kw...)

@@ -45,6 +45,7 @@ function continuationToken end
 function listObjects end
 makeURL(x::AbstractStore, key) = joinpath(x.baseurl, lstrip(key, '/'))
 function getObject end
+function headObject end
 include("get.jl")
 function putObject end
 function startMultipartUpload end

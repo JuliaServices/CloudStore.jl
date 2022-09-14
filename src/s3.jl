@@ -31,8 +31,9 @@ API.getObject(x::Bucket, url, headers; kw...) = AWS.get(url, headers; service="s
 get(x::Object, out::ResponseBodyType=nothing; kw...) = get(x.store, x.key, out; kw...)
 get(args...; kw...) = API.getObjectImpl(args...; kw...)
 
+API.headObject(x::Bucket, url, headers; kw...) = AWS.head(url; headers, service="s3", kw...)
 head(x::Object; kw...) = head(x.store, x.key; kw...)
-head(x::Bucket, key::String; kw...) = Dict(AWS.head(API.makeURL(x, key); service="s3", kw...).headers)
+head(x::Bucket, key::String; kw...) = API.headObjectImpl(x, key; kw...)
 
 put(args...; kw...) = API.putObjectImpl(args...; kw...)
 put(x::Object; kw...) = put(x.store, x.key; kw...)
