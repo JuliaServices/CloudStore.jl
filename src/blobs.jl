@@ -5,6 +5,7 @@ using ..API
 import ..parseAzureAccountContainerBlob
 
 const Container = Azure.Container
+const Credentials = Azure.Credentials
 
 API.cloudName(::Container) = "Blob Storage"
 

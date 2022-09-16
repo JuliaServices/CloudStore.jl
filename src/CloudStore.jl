@@ -180,5 +180,6 @@ end
 # cloud-specific API implementations
 include("s3.jl")
 include("blobs.jl")
+const BlobStorage = Blobs
 
 end # module CloudStore

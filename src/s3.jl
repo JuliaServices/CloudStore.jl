@@ -5,6 +5,7 @@ using ..API
 import ..parseAWSBucketRegionKey
 
 const Bucket = AWS.Bucket
+const Credentials = AWS.Credentials
 
 API.cloudName(::Bucket) = "S3"
 

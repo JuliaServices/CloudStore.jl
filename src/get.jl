@@ -86,7 +86,7 @@ function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType=noth
             nTasks = cld(total - eoff, partSize)
             nLoops = cld(nTasks, batchSize)
             sync = OrderedSynchronizer(1)
-            if res isa Vector{UInt8}
+            if res isa AbstractVector{UInt8}
                 resize!(res, total)
             end
             for j = 1:nLoops
@@ -99,7 +99,7 @@ function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType=noth
                             HTTP.setheader(headers, rng)
                             #TODO: in HTTP.jl, allow passing res as response_stream that we write to directly
                             r = getObject(x, url, headers; connection_limit=batchSize, kw...)
-                            if res isa Vector{UInt8}
+                            if res isa AbstractVector{UInt8}
                                 off, off2, _ = parseContentRange(HTTP.header(r, "Content-Range"))
                                 put!(sync, n) do
                                     copyto!(res, off + 1, r.body, 1, off2 - off + 1)
