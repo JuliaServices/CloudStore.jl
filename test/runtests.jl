@@ -223,6 +223,7 @@ end
         ("https://127.0.0.1:45942/myaccount/mycontainer/myblob", (true, "https://127.0.0.1:45942", "myaccount", "mycontainer", "myblob")),
         ("azure://127.0.0.1:45942/myaccount/mycontainer", (true, "https://127.0.0.1:45942", "myaccount", "mycontainer", "")),
         ("azure://127.0.0.1:45942/myaccount/mycontainer/myblob", (true, "https://127.0.0.1:45942", "myaccount", "mycontainer", "myblob")),
+        ("azure://myaccount", (true, nothing, "myaccount", "", ""))
     ]
     for (url, parts) in azure
         ok, host, account, container, blob = CloudStore.parseAzureAccountContainerBlob(url; parseLocal=true)
