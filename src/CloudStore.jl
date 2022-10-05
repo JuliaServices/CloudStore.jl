@@ -88,6 +88,11 @@ function parseAzureAccountContainerBlob(url; parseLocal::Bool=false)
         m = match(r"^(?<host>(https|azure)://[\d|\.|:]+?)/(?<account>[^/]+?)/(?<container>[^/]+?)(?:/(?<blob>.+))?$", url)
         m !== nothing && return (true, replace(String(m[:host]), "azure" => "https"; count=1), String(m[:account]), String(m[:container]), String(something(m[:blob], "")))
     end
+    # azure://myaccount/mycontainer/myblob
+    # azure://myaccount/mycontainer
+    # azure://myaccount
+    m = match(r"^azure://(?<account>[^/]+)(?:/(?<container>.+))?(?:/(?<blob>.+))?$"i, url)
+    m !== nothing && return (true, nothing, String(m[:account]), String(something(m[:container], "")), String(something(m[:blob], "")))
     return (false, nothing, "", "", "")
 end
 
