@@ -27,14 +27,15 @@ const RequestBodyType = Union{AbstractVector{UInt8}, String, IO}
 asArray(x::Array) = x
 asArray(x) = [x]
 
-struct Object
-    store::AbstractStore
-    key::String
-    lastModified::String
-    eTag::String
-    size::Int
-    storageClass::String
-end
+# struct Object
+#     store::AbstractStore
+#     key::String
+#     lastModified::String
+#     eTag::String
+#     size::Int
+#     storageClass::String
+# end
+include("object.jl")
 
 etag(x) = strip(x, '"')
 
