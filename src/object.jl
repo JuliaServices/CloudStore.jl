@@ -33,7 +33,7 @@ function Base.unsafe_copyto!(dest::AbstractVector{UInt8}, doff::Integer, src::Ob
     HTTP.setheader(headers, contentRange((soff - 1):(soff + n - 2)))
     url = makeURL(src.store, src.key)
     # avoid extra copy here by passing dest to be written to directly
-    resp = getObject(src.store, url, headers; response_stream=view(dest, doff:(doff+n-1)), credentials=src.credentials)
+    resp = getObject(src.store, url, headers; credentials=src.credentials)
     copyto!(dest, doff, resp.body)
     return n
 end
