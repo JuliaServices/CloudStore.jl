@@ -264,3 +264,24 @@ end
         @test key == parts[6]
     end
 end
+
+@testset "CloudStore.Object API" begin
+    Minio.with(; debug=true) do conf
+        credentials, bucket = conf
+        multicsv = "1,2,3,4,5,6,7,8,9,1\n"^1000000; # 20MB
+        S3.put(bucket, "test.csv", codeunits(multicsv); credentials)
+        obj = CloudStore.Object(bucket, "test.csv"; credentials)
+        @test length(obj) == sizeof(multicsv)
+        buf = Vector{UInt8}(undef, 1000)
+        copyto!(buf, 1, obj, 1, 1000)
+        @test buf == view(codeunits(multicsv), 1:1000)
+
+        ioobj = CloudStore.IOObject(obj)
+        i = 1
+        while !eof(ioobj)
+            readbytes!(ioobj, buf, 1000)
+            @test buf == view(codeunits(multicsv), i:min(i+999, length(multicsv)))
+            i += 1000
+        end
+    end
+end

@@ -6,7 +6,7 @@ import CloudBase: AWS, Azure, CloudTest
 # for specific clouds
 module API
 
-export Object, ResponseBodyType, RequestBodyType
+export Object, IOObject, ResponseBodyType, RequestBodyType
 
 using HTTP, CodecZlib, Mmap
 import WorkerUtilities: OrderedSynchronizer
