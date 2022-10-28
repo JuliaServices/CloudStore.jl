@@ -5,16 +5,23 @@ struct Object{T <: AbstractStore}
     credentials::Union{Nothing, AWS.Credentials, Azure.Credentials}
     key::String
     size::Int
+    eTag::String
 end
 
-Object(x::AbstractStore, k::String, lm::AbstractString, etag::AbstractString, sz::Integer, sc::AbstractString) =
-    Object(x, nothing, k, Int(sz))
+Object(
+    store::AbstractStore,
+    creds::Union{Nothing, AWS.Credentials, Azure.Credentials},
+    key::AbstractString,
+    size::Integer,
+    eTag::AbstractString) = Object(store, creds, String(key), Int(size), String(eTag))
 
 function Object(store::AbstractStore, key::String; credentials::Union{CloudCredentials, Nothing}=nothing)
     url = makeURL(store, key)
     resp = API.headObject(store, url, HTTP.Headers(); credentials=credentials)
     size = parse(Int, HTTP.header(resp, "Content-Length", "0"))
-    return Object(store, credentials, key, size)
+    #TODO: get eTag
+    et = etag(HTTP.header(resp, "ETag", ""))
+    return Object(store, credentials, key, size, String(et))
 end
 
 Base.length(x::Object) = x.size
@@ -44,6 +51,8 @@ mutable struct IOObject{T <: Object} <: IO
 end
 
 IOObject(x::Object) = IOObject(x, 1)
+IOObject(store::AbstractStore, key::String; credentials::Union{CloudCredentials, Nothing}=nothing) =
+    IOObject(Object(store, key; credentials))
 
 Base.eof(x::IOObject) = x.pos > length(x.object)
 
@@ -51,7 +60,7 @@ function Base.readbytes!(x::IOObject, dest::AbstractVector{UInt8}, n::Integer=le
     n = min(n, length(dest))
     n = min(n, length(x.object) - x.pos + 1)
     n == 0 && return dest
-    copyto!(dest, 1, x.object, x.pos, n)
+    Base.unsafe_copyto!(dest, 1, x.object, x.pos, n)
     x.pos += n
     return dest
 end

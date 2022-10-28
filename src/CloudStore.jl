@@ -27,6 +27,9 @@ const RequestBodyType = Union{AbstractVector{UInt8}, String, IO}
 asArray(x::Array) = x
 asArray(x) = [x]
 
+etag(x) = strip(x, '"')
+makeURL(x::AbstractStore, key) = joinpath(x.baseurl, lstrip(key, '/'))
+
 # struct Object
 #     store::AbstractStore
 #     key::String
@@ -37,14 +40,11 @@ asArray(x) = [x]
 # end
 include("object.jl")
 
-etag(x) = strip(x, '"')
-
 function cloudName end
 function maxListKeys end
 function listMaxKeysQuery end
 function continuationToken end
 function listObjects end
-makeURL(x::AbstractStore, key) = joinpath(x.baseurl, lstrip(key, '/'))
 function getObject end
 function headObject end
 include("get.jl")

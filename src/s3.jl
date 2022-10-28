@@ -9,19 +9,19 @@ const Credentials = AWS.Credentials
 
 API.cloudName(::Bucket) = "S3"
 
-object(b::Bucket, x) = Object(b, x["Key"], x["LastModified"], API.etag(x["ETag"]), parse(Int, x["Size"]), x["StorageClass"])
+object(b::Bucket, creds, x) = Object(b, creds, x["Key"], parse(Int, x["Size"]), API.etag(x["ETag"]))
 
 API.maxListKeys(::Bucket) = 1000
 API.listMaxKeysQuery(::Bucket) = "max-keys"
 API.continuationToken(::Bucket) = "continuation-token"
 
-function API.listObjects(x::Bucket, query, result=nothing; kw...)
+function API.listObjects(x::Bucket, query, result=nothing; credentials=nothing, kw...)
     query["list-type"] = "2"
-    result = xml_dict(String(AWS.get(x.baseurl; query, service="s3", kw...).body))["ListBucketResult"]
+    result = xml_dict(String(AWS.get(x.baseurl; credentials, query, service="s3", kw...).body))["ListBucketResult"]
     if parse(Int, result["KeyCount"]) == 0
         return (Object[], "")
     end
-    contents = map(y -> object(x, y), API.asArray(result["Contents"]))
+    contents = map(y -> object(x, credentials, y), API.asArray(result["Contents"]))
     return (contents, result["IsTruncated"] == "true" ? result["NextContinuationToken"] : "")
 end
 
@@ -29,15 +29,15 @@ list(x::Bucket; kw...) = API.listObjectsImpl(x; kw...)
 
 API.getObject(x::Bucket, url, headers; kw...) = AWS.get(url, headers; service="s3", kw...)
 
-get(x::Object, out::ResponseBodyType=nothing; kw...) = get(x.store, x.key, out; kw...)
+get(x::Object, out::ResponseBodyType=nothing; kw...) = get(x.store, x.key, out; credentials=x.credentials, kw...)
 get(args...; kw...) = API.getObjectImpl(args...; kw...)
 
 API.headObject(x::Bucket, url, headers; kw...) = AWS.head(url; headers, service="s3", kw...)
-head(x::Object; kw...) = head(x.store, x.key; kw...)
+head(x::Object; kw...) = head(x.store, x.key; credentials=x.credentials, kw...)
 head(x::Bucket, key::String; kw...) = API.headObjectImpl(x, key; kw...)
 
 put(args...; kw...) = API.putObjectImpl(args...; kw...)
-put(x::Object; kw...) = put(x.store, x.key; kw...)
+put(x::Object; kw...) = put(x.store, x.key; credentials=x.credentials, kw...)
 
 API.putObject(x::Bucket, key, body; kw...) = AWS.put(API.makeURL(x, key), [], body; service="s3", kw...)
 
@@ -58,7 +58,7 @@ function API.completeMultipartUpload(x::Bucket, url, eTags, uploadId; kw...)
 end
 
 delete(x::Bucket, key; kw...) = AWS.delete(API.makeURL(x, key); service="s3", kw...)
-delete(x::Object; kw...) = delete(x.store, x.key; kw...)
+delete(x::Object; kw...) = delete(x.store, x.key; credentials=x.credentials, kw...)
 
 for func in (:list, :get, :head, :put, :delete)
     @eval function $func(url::AbstractString, args...; region=nothing, nowarn::Bool=false, kw...)

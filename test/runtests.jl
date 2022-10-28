@@ -227,7 +227,6 @@ end
     ]
     for (url, parts) in azure
         ok, host, account, container, blob = CloudStore.parseAzureAccountContainerBlob(url; parseLocal=true)
-        @show url, ok, host, account, container, blob
         @test ok
         @test host == parts[2]
         @test account == parts[3]
@@ -255,7 +254,6 @@ end
     ]
     for (url, parts) in s3
         ok, accelerate, host, bucket, reg, key = CloudStore.parseAWSBucketRegionKey(url; parseLocal=true)
-        @show url, ok, accelerate, host, bucket, reg, key
         @test ok
         @test accelerate == parts[2]
         @test host == parts[3]

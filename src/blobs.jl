@@ -9,20 +9,20 @@ const Credentials = Azure.Credentials
 
 API.cloudName(::Container) = "Blob Storage"
 
-object(b, x) = Object(b, x["Name"], x["Properties"]["Last-Modified"], API.etag(x["Properties"]["Etag"]), parse(Int, x["Properties"]["Content-Length"]), "")
+object(b, creds, x) = Object(b, creds, x["Name"], parse(Int, x["Properties"]["Content-Length"]), API.etag(x["Properties"]["Etag"]))
 
 API.maxListKeys(::Container) = 5000
 API.listMaxKeysQuery(::Container) = "maxresults"
 API.continuationToken(::Container) = "marker"
 
-function API.listObjects(x::Container, query, result=nothing; kw...)
+function API.listObjects(x::Container, query, result=nothing; credentials=nothing, kw...)
     query["restype"] = "container"
     query["comp"] = "list"
-    result = xml_dict(String(Azure.get(x.baseurl; query, kw...).body))["EnumerationResults"]
+    result = xml_dict(String(Azure.get(x.baseurl; query, credentials, kw...).body))["EnumerationResults"]
     if isempty(result["Blobs"])
         return (Object[], "")
     end
-    contents = map(y -> object(x, y), API.asArray(result["Blobs"]["Blob"]))
+    contents = map(y -> object(x, credentials, y), API.asArray(result["Blobs"]["Blob"]))
     return (contents, result["NextMarker"])
 end
 
@@ -30,15 +30,15 @@ list(x::Container; kw...) = API.listObjectsImpl(x; kw...)
 
 API.getObject(x::Container, url, headers; kw...) = Azure.get(url, headers; kw...)
 
-get(x::Object, args...; kw...) = get(x.store, x.key, args...; kw...)
+get(x::Object, args...; kw...) = get(x.store, x.key, args...; credentials=x.credentials, kw...)
 get(args...; kw...) = API.getObjectImpl(args...; kw...)
 
 API.headObject(x::Container, url, headers; kw...) = Azure.head(url; headers, kw...)
-head(x::Object; kw...) = head(x.store, x.key; kw...)
+head(x::Object; kw...) = head(x.store, x.key; credentials=x.credentials, kw...)
 head(x::Container, key::String; kw...) = API.headObjectImpl(x, key; kw...)
 
 put(args...; kw...) = API.putObjectImpl(args...; kw...)
-put(x::Object; kw...) = put(x.store, x.key; kw...)
+put(x::Object; kw...) = put(x.store, x.key; credentials=x.credentials, kw...)
 
 API.putObject(x::Container, key, body; kw...) = Azure.put(API.makeURL(x, key), ["x-ms-blob-type" => "BlockBlob"], body; kw...)
 
@@ -57,7 +57,7 @@ function API.completeMultipartUpload(x::Container, url, eTags, uploadId; kw...)
 end
 
 delete(x::Container, key::String; kw...) = Azure.delete(API.makeURL(x, key); kw...)
-delete(x::Object; kw...) = delete(x.store, x.key; kw...)
+delete(x::Object; kw...) = delete(x.store, x.key; credentials=x.credentials, kw...)
 
 for func in (:list, :get, :head, :put, :delete)
     @eval function $func(url::AbstractString, args...; kw...)
