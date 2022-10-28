@@ -30,14 +30,6 @@ asArray(x) = [x]
 etag(x) = strip(x, '"')
 makeURL(x::AbstractStore, key) = joinpath(x.baseurl, lstrip(key, '/'))
 
-# struct Object
-#     store::AbstractStore
-#     key::String
-#     lastModified::String
-#     eTag::String
-#     size::Int
-#     storageClass::String
-# end
 include("object.jl")
 
 function cloudName end
