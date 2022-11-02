@@ -6,7 +6,7 @@ import CloudBase: AWS, Azure, CloudTest
 # for specific clouds
 module API
 
-export Object, ResponseBodyType, RequestBodyType
+export Object, IOObject, ResponseBodyType, RequestBodyType
 
 using HTTP, CodecZlib, Mmap
 import WorkerUtilities: OrderedSynchronizer
@@ -27,23 +27,16 @@ const RequestBodyType = Union{AbstractVector{UInt8}, String, IO}
 asArray(x::Array) = x
 asArray(x) = [x]
 
-struct Object
-    store::AbstractStore
-    key::String
-    lastModified::String
-    eTag::String
-    size::Int
-    storageClass::String
-end
-
 etag(x) = strip(x, '"')
+makeURL(x::AbstractStore, key) = joinpath(x.baseurl, lstrip(key, '/'))
+
+include("object.jl")
 
 function cloudName end
 function maxListKeys end
 function listMaxKeysQuery end
 function continuationToken end
 function listObjects end
-makeURL(x::AbstractStore, key) = joinpath(x.baseurl, lstrip(key, '/'))
 function getObject end
 function headObject end
 include("get.jl")

@@ -48,16 +48,16 @@ function putObjectImpl(x::AbstractStore, key::String, in::RequestBodyType;
     partSize::Int=MULTIPART_SIZE,
     batchSize::Int=defaultBatchSize(),
     allowMultipart::Bool=true,
-    compress::Bool=false, kw...)
+    compress::Bool=false, credentials=nothing, kw...)
 
     N = nbytes(in)
     if N <= multipartThreshold || !allowMultipart
         body = prepBody(in, compress)
-        resp = putObject(x, key, body; kw...)
-        return Object(x, key, "", etag(HTTP.header(resp, "ETag")), N, "")
+        resp = putObject(x, key, body; credentials, kw...)
+        return Object(x, credentials, key, N, etag(HTTP.header(resp, "ETag")))
     end
     # multipart upload
-    uploadState = startMultipartUpload(x, key; kw...)
+    uploadState = startMultipartUpload(x, key; credentials, kw...)
     url = makeURL(x, key)
     eTags = String[]
     sync = OrderedSynchronizer(1)
@@ -74,7 +74,7 @@ function putObjectImpl(x::AbstractStore, key::String, in::RequestBodyType;
             part = _read(body, partSize)
             let n=n, part=part
                 Threads.@spawn begin
-                    eTag = uploadPart(x, url, part, n, uploadState; kw...)
+                    eTag = uploadPart(x, url, part, n, uploadState; credentials, kw...)
                     let eTag=eTag
                         # we synchronize the eTags here because the order matters
                         # for the final call to completeMultipartUpload
@@ -92,6 +92,6 @@ function putObjectImpl(x::AbstractStore, key::String, in::RequestBodyType;
     if in isa String
         close(body)
     end
-    eTag = completeMultipartUpload(x, url, eTags, uploadState; kw...)
-    return Object(x, key, "", eTag, N, "")
+    eTag = completeMultipartUpload(x, url, eTags, uploadState; credentials, kw...)
+    return Object(x, credentials, key, N, eTag)
 end
