@@ -83,7 +83,7 @@ function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType=noth
     if allowMultipart
         soff, eoff, total = parseContentRange(HTTP.header(resp, "Content-Range"))
         if (eoff + 1) < total
-            nTasks = cld(total - eoff, partSize)
+            nTasks = cld((total - 1) - eoff, partSize)
             nLoops = cld(nTasks, batchSize)
             sync = OrderedSynchronizer(1)
             if res isa AbstractVector{UInt8}
@@ -95,7 +95,7 @@ function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType=noth
                     n > nTasks && break
                     let n=n, headers=copy(headers)
                         Threads.@spawn begin
-                            rng = contentRange(((n - 1) * partSize + eoff + 1):min(total, (n * partSize) + eoff))
+                            rng = contentRange(((n - 1) * partSize + eoff + 1):min(total - 1, (n * partSize) + eoff))
                             HTTP.setheader(headers, rng)
                             #TODO: in HTTP.jl, allow passing res as response_stream that we write to directly
                             r = getObject(x, url, headers; connection_limit=batchSize, kw...)
