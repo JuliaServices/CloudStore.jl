@@ -54,9 +54,6 @@ function putObjectImpl(x::AbstractStore, key::String, in::RequestBodyType;
     if N <= multipartThreshold || !allowMultipart
         body = prepBody(in, compress)
         resp = putObject(x, key, body; credentials, kw...)
-        if resp.status != 200
-            @error String(resp.body)
-        end
         return Object(x, credentials, key, N, etag(HTTP.header(resp, "ETag")))
     end
     # multipart upload
