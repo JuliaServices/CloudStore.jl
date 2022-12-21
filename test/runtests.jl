@@ -1,5 +1,6 @@
 using Test, CloudStore, CloudBase.CloudTest
 import CloudStore: S3, Blobs
+using CodecZlib
 
 bytes(x) = codeunits(x)
 
@@ -118,7 +119,7 @@ check(x, y) = begin; reset!(x); reset!(y); z = read(x) == read(y); reset!(x); re
                 S3.delete(bucket, "test4.csv"; credentials)
                 S3.delete(bucket, "test5.csv"; credentials)
                 S3.delete(bucket, "test6.csv"; credentials)
-                
+
                 objs = S3.list(bucket; credentials)
                 @test length(objs) == 0
             end
@@ -266,7 +267,7 @@ end
 @testset "CloudStore.Object API" begin
     Minio.with(; debug=true) do conf
         credentials, bucket = conf
-        multicsv = "1,2,3,4,5,6,7,8,9,1\n"^1000000; # 20MB
+        multicsv = "1,2,3,4,5,6,7,8,9,1\n"^100000; # 2MB
         S3.put(bucket, "test.csv", codeunits(multicsv); credentials)
         obj = CloudStore.Object(bucket, "test.csv"; credentials)
         @test length(obj) == sizeof(multicsv)
@@ -276,10 +277,158 @@ end
 
         ioobj = CloudStore.IOObject(obj)
         i = 1
-        while !eof(ioobj)
+        while i < sizeof(multicsv)
             readbytes!(ioobj, buf, 1000)
             @test buf == view(codeunits(multicsv), i:min(i+999, length(multicsv)))
             i += 1000
+        end
+    end
+end
+
+@testset "CloudStore.PrefechedDownloadStream small readbytes!" begin
+    Minio.with(; debug=true) do conf
+        credentials, bucket = conf
+        multicsv = "1,2,3,4,5,6,7,8,9,1\n"^10; # 200 B
+        S3.put(bucket, "test.csv", codeunits(multicsv); credentials)
+        obj = CloudStore.Object(bucket, "test.csv"; credentials)
+        @test length(obj) == sizeof(multicsv)
+
+        N = 19
+        buf = Vector{UInt8}(undef, N)
+        copyto!(buf, 1, obj, 1, N)
+        @test buf == view(codeunits(multicsv), 1:N)
+
+        ioobj = CloudStore.PrefechedDownloadStream(bucket, "test.csv", 16; credentials)
+        i = 1
+        while i < sizeof(multicsv)
+            nb = i + N > length(multicsv) ? length(multicsv) - i : N
+            readbytes!(ioobj, buf, N)
+            @test view(buf, 1:nb) == view(codeunits(multicsv), i:i+nb-1)
+            i += N
+        end
+    end
+end
+
+@testset "CloudStore.PrefechedDownloadStream large readbytes!" begin
+    Minio.with(; debug=true) do conf
+        credentials, bucket = conf
+        multicsv = "1,2,3,4,5,6,7,8,9,1\n"^1000000; # 20 MB
+        S3.put(bucket, "test.csv", codeunits(multicsv); credentials)
+        obj = CloudStore.Object(bucket, "test.csv"; credentials)
+        @test length(obj) == sizeof(multicsv)
+
+        N = 1024*1024
+        buf = Vector{UInt8}(undef, N)
+        copyto!(buf, 1, obj, 1, N)
+        @test buf == view(codeunits(multicsv), 1:N)
+
+        ioobj = CloudStore.PrefechedDownloadStream(bucket, "test.csv", 1024*1024; credentials)
+        i = 1
+        while i < sizeof(multicsv)
+            nb = i + N > length(multicsv) ? length(multicsv) - i : N
+            readbytes!(ioobj, buf, N)
+            @test view(buf, 1:nb) == view(codeunits(multicsv), i:i+nb-1)
+            i += N
+        end
+    end
+end
+
+@testset "CloudStore.PrefechedDownloadStream small unsafe_read" begin
+    Minio.with(; debug=true) do conf
+        credentials, bucket = conf
+        multicsv = "1,2,3,4,5,6,7,8,9,1\n"^10; # 200 B
+        S3.put(bucket, "test.csv", codeunits(multicsv); credentials)
+        obj = CloudStore.Object(bucket, "test.csv"; credentials)
+        @test length(obj) == sizeof(multicsv)
+
+        N = 19
+        buf = Vector{UInt8}(undef, N)
+        copyto!(buf, 1, obj, 1, N)
+        @test buf == view(codeunits(multicsv), 1:N)
+
+        ioobj = CloudStore.PrefechedDownloadStream(bucket, "test.csv", 16; credentials)
+        i = 1
+        @time while i < sizeof(multicsv)
+            nb = i + N > length(multicsv) ? length(multicsv) - i : N
+            unsafe_read(ioobj, pointer(buf), nb)
+            @test view(buf, 1:nb) == view(codeunits(multicsv), i:i+nb-1)
+            i += N
+        end
+    end
+end
+
+@testset "CloudStore.PrefechedDownloadStream large unsafe_read" begin
+    Minio.with(; debug=true) do conf
+        credentials, bucket = conf
+        multicsv = "1,2,3,4,5,6,7,8,9,1\n"^1000000; # 20 MB
+        S3.put(bucket, "test.csv", codeunits(multicsv); credentials)
+        obj = CloudStore.Object(bucket, "test.csv"; credentials)
+        @test length(obj) == sizeof(multicsv)
+
+        N = 1024*1024
+        buf = Vector{UInt8}(undef, N)
+        copyto!(buf, 1, obj, 1, N)
+        @test buf == view(codeunits(multicsv), 1:N)
+
+        ioobj = CloudStore.PrefechedDownloadStream(bucket, "test.csv", 1024*1024; credentials)
+        i = 1
+        while i < sizeof(multicsv)
+            nb = i + N > length(multicsv) ? length(multicsv) - i : N
+            unsafe_read(ioobj, pointer(buf), nb)
+            @test view(buf, 1:nb) == view(codeunits(multicsv), i:i+nb-1)
+            i += N
+        end
+    end
+end
+
+
+
+@testset "CloudStore.PrefechedDownloadStream small readbytes! decompress" begin
+    Minio.with(; debug=true) do conf
+        credentials, bucket = conf
+        multicsv = "1,2,3,4,5,6,7,8,9,1\n"^100; # 2000 B
+        codec = ZlibCompressor();
+        CodecZlib.initialize(codec)
+        compressed = transcode(codec, codeunits(multicsv))
+        S3.put(bucket, "test.csv.gz", compressed; credentials)
+        CodecZlib.finalize(codec)
+        obj = CloudStore.Object(bucket, "test.csv.gz"; credentials)
+        @test length(obj) == sizeof(compressed)
+
+        N = 19
+        buf = Vector{UInt8}(undef, N)
+        ioobj = GzipDecompressorStream(CloudStore.PrefechedDownloadStream(bucket, "test.csv.gz", 16; credentials))
+        i = 1
+        while i < sizeof(multicsv)
+            nb = i + N > length(multicsv) ? length(multicsv) - i : N
+            readbytes!(ioobj, buf, N)
+            @test view(buf, 1:nb) == view(codeunits(multicsv), i:i+nb-1)
+            i += N
+        end
+    end
+end
+
+@testset "CloudStore.PrefechedDownloadStream large readbytes! decompress" begin
+    Minio.with(; debug=true) do conf
+        credentials, bucket = conf
+        multicsv = "1,2,3,4,5,6,7,8,9,1\n"^1000000; # 20 MB
+        codec = ZlibCompressor();
+        CodecZlib.initialize(codec)
+        compressed = transcode(codec, codeunits(multicsv))
+        S3.put(bucket, "test.csv.gz", compressed; credentials)
+        CodecZlib.finalize(codec)
+        obj = CloudStore.Object(bucket, "test.csv.gz"; credentials)
+        @test length(obj) == sizeof(compressed)
+
+        N = 1024*1024
+        buf = Vector{UInt8}(undef, N)
+        ioobj = GzipDecompressorStream(CloudStore.PrefechedDownloadStream(bucket, "test.csv.gz", 16*1024; credentials))
+        i = 1
+        while i < sizeof(multicsv)
+            nb = i + N > length(multicsv) ? length(multicsv) - i : N
+            readbytes!(ioobj, buf, N)
+            @test view(buf, 1:nb) == view(codeunits(multicsv), i:i+nb-1)
+            i += N
         end
     end
 end

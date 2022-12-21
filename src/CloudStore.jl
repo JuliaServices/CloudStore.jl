@@ -6,7 +6,7 @@ import CloudBase: AWS, Azure, CloudTest
 # for specific clouds
 module API
 
-export Object, IOObject, ResponseBodyType, RequestBodyType
+export Object, IOObject, PrefechedDownloadStream, ResponseBodyType, RequestBodyType
 
 using HTTP, CodecZlib, Mmap
 import WorkerUtilities: OrderedSynchronizer
@@ -14,7 +14,7 @@ import CloudBase: AbstractStore
 
 """
 Controls the automatic use of concurrency when downloading/uploading.
-  * Downloading: the size of the initial content range requested; if 
+  * Downloading: the size of the initial content range requested; if
 """
 const MULTIPART_THRESHOLD = 2^23 # 8MB
 const MULTIPART_SIZE = 2^23
