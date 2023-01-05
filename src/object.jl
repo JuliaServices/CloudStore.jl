@@ -1,5 +1,8 @@
 import CloudBase: AbstractStore, CloudCredentials, AWS, Azure
 
+const DEFAULT_PREFETCH_SIZE = 32 * 1024 * 1024
+const DEFAULT_PREFETCH_MULTIPART_SIZE = 8 * 1024 * 1024
+
 struct Object{T <: AbstractStore}
     store::T
     credentials::Union{Nothing, AWS.Credentials, Azure.Credentials}
@@ -110,16 +113,14 @@ function _prefetching_task(io)
     while len > ppos
         n = min(len - ppos + 1, prefetch_size)
         off = 0
-        rngs = Iterators.partition(ppos:ppos+n 2*1024*1024)
+        rngs = Iterators.partition(ppos:ppos+n, io.prefetch_multipart_size)
         io.cond.ntasks = length(rngs)
-        # @info "expect $(io.cond.ntasks)"
         for rng in rngs
             put!(io.download_queue, (off, rng, download_buffer))
             off += length(rng)
         end
         @lock io.cond.cond_wait begin
             while true
-                # @info "waiting for 0, got $(io.cond.ntasks)"
                 io.cond.ntasks == 0 && break
                 wait(io.cond.cond_wait)
             end
@@ -143,7 +144,6 @@ function _download_task(io)
 
     while true
         (off, rng, download_buffer) = take!(io.download_queue)
-        # @info "got $off, $rng, $(length(rng))"
         HTTP.setheader(headers, contentRange(rng))
         #TODO: in HTTP.jl, allow passing res as response_stream that we write to directly
         resp = getObject(object.store, url, headers; credentials)
@@ -151,7 +151,6 @@ function _download_task(io)
         unsafe_copyto!(download_buffer, off + 1, resp.body, 1, length(rng))
 
         @lock io.cond.cond_wait begin
-            # @info "done with $(io.cond.ntasks)"
             io.cond.ntasks -= 1
             notify(io.cond.cond_wait)
         end
@@ -165,13 +164,15 @@ mutable struct PrefechedDownloadStream{T <: Object} <: IO
     len::Int
     buf::Union{Nothing,PrefetchBuffer}
     prefetch_size::Int
+    prefetch_multipart_size::Int
     prefetch_queue::Channel{PrefetchBuffer}
     download_queue::Channel{Tuple{Int,UnitRange{Int},Vector{UInt8}}}
     cond::TaskCondition
 
     function PrefechedDownloadStream(
         object::T,
-        prefetch_size::Int=MULTIPART_SIZE;
+        prefetch_size::Int=DEFAULT_PREFETCH_SIZE;
+        prefetch_multipart_size::Int=DEFAULT_PREFETCH_MULTIPART_SIZE
     ) where {T<:Object}
         len = length(object)
         size = min(prefetch_size, len)
@@ -181,11 +182,14 @@ mutable struct PrefechedDownloadStream{T <: Object} <: IO
             len,
             nothing,
             size,
+            min(size, prefetch_multipart_size),
             Channel{PrefetchBuffer}(0),
             Channel{Tuple{Int,UnitRange{Int},Vector{UInt8}}}(Inf),
             TaskCondition()
         )
-        for _ in 1:min(8, max(1, div(size, 2*1024*1024)))
+        prefetch_size > 0 || throw(ArgumentError("`prefetch_size` must be positive, got $prefetch_size"))
+        prefetch_multipart_size > 0 || throw(ArgumentError("`prefetch_multipart_size` must be positive, got $prefetch_multipart_size"))
+        for _ in 1:min(Threads.nthreads(), max(1, div(size, io.prefetch_multipart_size)))
             Threads.@spawn _download_task($io)
         end
         Threads.@spawn _prefetching_task($io)
@@ -195,15 +199,16 @@ mutable struct PrefechedDownloadStream{T <: Object} <: IO
     function PrefechedDownloadStream(
         store::AbstractStore,
         key::String,
-        prefetch_size::Int=MULTIPART_SIZE;
-        credentials::Union{CloudCredentials, Nothing}=nothing
+        prefetch_size::Int=DEFAULT_PREFETCH_SIZE;
+        credentials::Union{CloudCredentials, Nothing}=nothing,
+        prefetch_multipart_size::Int=DEFAULT_PREFETCH_MULTIPART_SIZE,
     )
         url = makeURL(store, key)
         resp = API.headObject(store, url, HTTP.Headers(); credentials=credentials)
         len = parse(Int, HTTP.header(resp, "Content-Length", "0"))
         et = etag(HTTP.header(resp, "ETag", ""))
         object = Object(store, credentials, String(key), Int(len), String(et))
-        return PrefechedDownloadStream(object, prefetch_size)
+        return PrefechedDownloadStream(object, prefetch_size; prefetch_multipart_size)
     end
 end
 Base.eof(io::PrefechedDownloadStream) = io.pos >= io.len
