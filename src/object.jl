@@ -103,14 +103,14 @@ Base.bytesavailable(b::PrefetchBuffer) = b.len - b.pos + 1
 function _prefetching_task(io)
     prefetch_size = io.prefetch_size
     len = io.len
-    ppos = 1
+    ppos = 0
     download_buffer = Vector{UInt8}(undef, prefetch_size)
     download_buffer_next = Vector{UInt8}(undef, prefetch_size)
 
     while len > ppos
         n = min(len - ppos + 1, prefetch_size)
         off = 0
-        rngs = Iterators.partition(ppos:ppos+n-1, 2*1024*1024)
+        rngs = Iterators.partition(ppos:ppos+n 2*1024*1024)
         io.cond.ntasks = length(rngs)
         # @info "expect $(io.cond.ntasks)"
         for rng in rngs
