@@ -8,8 +8,7 @@ module API
 
 export Object, IOObject, PrefechedDownloadStream, ResponseBodyType, RequestBodyType
 
-using HTTP, CodecZlib, Mmap
-import WorkerUtilities: OrderedSynchronizer
+using HTTP, CodecZlib, Mmap, WorkerUtilities
 import CloudBase: AbstractStore
 
 """

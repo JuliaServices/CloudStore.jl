@@ -100,61 +100,50 @@ mutable struct PrefetchBuffer
 end
 Base.bytesavailable(b::PrefetchBuffer) = b.len - b.pos + 1
 
-function _prefetching_task(io)
+function _prefetching_task(io, put!, wait)
     prefetch_size = io.prefetch_size
     len = io.len
-    ppos = 1
+    ppos = 0
     download_buffer = Vector{UInt8}(undef, prefetch_size)
     download_buffer_next = Vector{UInt8}(undef, prefetch_size)
 
     while len > ppos
         n = min(len - ppos + 1, prefetch_size)
         off = 0
-        rngs = Iterators.partition(ppos:ppos+n-1, 2*1024*1024)
-        io.cond.ntasks = length(rngs)
+        rngs = Iterators.partition(ppos:ppos+n, 2*1024*1024)
         # @info "expect $(io.cond.ntasks)"
         for rng in rngs
-            put!(io.download_queue, (off, rng, download_buffer))
+            # @info "putting $off, $rng, $(length(rng))"
+            put!((off, rng, download_buffer))
             off += length(rng)
         end
-        @lock io.cond.cond_wait begin
-            while true
-                # @info "waiting for 0, got $(io.cond.ntasks)"
-                io.cond.ntasks == 0 && break
-                wait(io.cond.cond_wait)
-            end
-        end
+        # @info "waiting"
+        wait()
 
         buf = PrefetchBuffer(download_buffer, 1, n)
         ppos += n
-        put!(io.prefetch_queue, buf)
+        Base.put!(io.prefetch_queue, buf)
         download_buffer, download_buffer_next = download_buffer_next, download_buffer
     end
     close(io.prefetch_queue)
-    close(io.download_queue)
     return nothing
 end
 
-function _download_task(io)
+function _download_task(io, taskset)
     headers = HTTP.Headers()
     object = io.object
     url = makeURL(object.store, io.object.key)
     credentials = object.credentials
 
     while true
-        (off, rng, download_buffer) = take!(io.download_queue)
+        done, (off, rng, download_buffer) = take!(taskset)
         # @info "got $off, $rng, $(length(rng))"
         HTTP.setheader(headers, contentRange(rng))
         #TODO: in HTTP.jl, allow passing res as response_stream that we write to directly
         resp = getObject(object.store, url, headers; credentials)
-
         unsafe_copyto!(download_buffer, off + 1, resp.body, 1, length(rng))
 
-        @lock io.cond.cond_wait begin
-            # @info "done with $(io.cond.ntasks)"
-            io.cond.ntasks -= 1
-            notify(io.cond.cond_wait)
-        end
+        done()
     end
     return nothing
 end
@@ -166,8 +155,7 @@ mutable struct PrefechedDownloadStream{T <: Object} <: IO
     buf::Union{Nothing,PrefetchBuffer}
     prefetch_size::Int
     prefetch_queue::Channel{PrefetchBuffer}
-    download_queue::Channel{Tuple{Int,UnitRange{Int},Vector{UInt8}}}
-    cond::TaskCondition
+    taskset::TaskSet{Tuple{Int,UnitRange{Int},Vector{UInt8}}}
 
     function PrefechedDownloadStream(
         object::T,
@@ -175,6 +163,7 @@ mutable struct PrefechedDownloadStream{T <: Object} <: IO
     ) where {T<:Object}
         len = length(object)
         size = min(prefetch_size, len)
+        ts = TaskSet(Tuple{Int,UnitRange{Int},Vector{UInt8}})
         io = new{T}(
             object,
             1,
@@ -182,13 +171,12 @@ mutable struct PrefechedDownloadStream{T <: Object} <: IO
             nothing,
             size,
             Channel{PrefetchBuffer}(0),
-            Channel{Tuple{Int,UnitRange{Int},Vector{UInt8}}}(Inf),
-            TaskCondition()
+            ts
         )
-        for _ in 1:min(8, max(1, div(size, 2*1024*1024)))
-            Threads.@spawn _download_task($io)
+        for _ in 1:min(8, max(1, div(size, 2^23)))
+            consume!(ts -> _download_task(io, ts), ts) 
         end
-        Threads.@spawn _prefetching_task($io)
+        produce!((p, w) -> _prefetching_task(io, p, w), ts)
         return io
     end
 
