@@ -50,47 +50,6 @@ function Base.unsafe_copyto!(dest::AbstractVector{UInt8}, doff::Integer, src::Ob
     return n
 end
 
-function Base.unsafe_copyto!(dest::Channel, doff::Integer, src::Object, soff::Integer, n::Integer)
-    bytes = getRange(src, soff, n)
-    dest_arr, new_n = take!(dest)
-    new_n == n || throw(ArgumentError("prefetched number of bytes (`$n`) doesn't matched requested number of bytes (`$new_n`)"))
-    copyto!(dest_arr::AbstractVector{UInt8}, doff, bytes)
-    put!(dest, n)
-    return n
-end
-
-mutable struct IOObject{T <: Object} <: IO
-    object::T
-    pos::Int
-    prefetch::Union{Nothing, Task}
-    chan::Channel{Any}
-end
-
-IOObject(x::Object) = IOObject(x, 1, nothing, Channel{Any}(0))
-IOObject(store::AbstractStore, key::String; credentials::Union{CloudCredentials, Nothing}=nothing) =
-    IOObject(Object(store, key; credentials))
-
-Base.eof(x::IOObject) = x.pos > length(x.object)
-
-function Base.readbytes!(x::IOObject, dest::AbstractVector{UInt8}, n::Integer=length(dest))
-    n = min(n, length(dest))
-    n = min(n, length(x.object) - x.pos + 1)
-    n == 0 && return dest
-    if x.prefetch === nothing
-        # no prefetch, request directly
-        Base.unsafe_copyto!(dest, 1, x.object, x.pos, n)
-        x.pos += n
-    else
-        put!(x.chan, (dest, n))
-        x.pos += take!(x.chan)::Integer
-    end
-    if !eof(x)
-        # start prefetch
-        x.prefetch = @async Base.unsafe_copyto!(x.chan, 1, x.object, x.pos, n)
-    end
-    return dest
-end
-
 mutable struct TaskCondition
     cond_wait::Threads.Condition
     ntasks::Int
@@ -111,12 +70,14 @@ function _prefetching_task(io)
     download_buffer_next = Vector{UInt8}(undef, prefetch_size)
 
     while len > ppos
-        n = min(len - ppos + 1, prefetch_size)
+        n = min(len - ppos, prefetch_size)
         off = 0
-        rngs = Iterators.partition(ppos:ppos+n, io.prefetch_multipart_size)
+        # `partition` plays nicely with 1-based ranges, but we need zero based ranges for
+        # `contentRange`
+        rngs = Iterators.partition(ppos+1:ppos+n, io.prefetch_multipart_size)
         io.cond.ntasks = length(rngs)
         for rng in rngs
-            put!(io.download_queue, (off, rng, download_buffer))
+            put!(io.download_queue, (off, rng .- 1, download_buffer))
             off += length(rng)
         end
         @lock io.cond.cond_wait begin
@@ -141,14 +102,16 @@ function _download_task(io)
     object = io.object
     url = makeURL(object.store, io.object.key)
     credentials = object.credentials
+    response_stream = IOBuffer(view(UInt8[], 1:0), write=true, maxsize=io.prefetch_multipart_size)
 
     while true
         (off, rng, download_buffer) = take!(io.download_queue)
         HTTP.setheader(headers, contentRange(rng))
-        #TODO: in HTTP.jl, allow passing res as response_stream that we write to directly
-        resp = getObject(object.store, url, headers; credentials)
-
-        unsafe_copyto!(download_buffer, off + 1, resp.body, 1, length(rng))
+        buffer_view = view(download_buffer, off + 1:off + length(rng))
+        response_stream.data = buffer_view
+        response_stream.maxsize = length(buffer_view)
+        seekstart(response_stream)
+        _ = getObject(object.store, url, headers; credentials, response_stream)
 
         @lock io.cond.cond_wait begin
             io.cond.ntasks -= 1
@@ -213,7 +176,13 @@ mutable struct PrefechedDownloadStream{T <: Object} <: IO
 end
 Base.eof(io::PrefechedDownloadStream) = io.pos >= io.len
 Base.bytesavailable(io::PrefechedDownloadStream) = io.len - io.pos + 1
-Base.isopen(io::PrefechedDownloadStream) = !eof(io)
+function Base.close(io::PrefechedDownloadStream)
+    close(io.prefetch_queue)
+    close(io.download_queue)
+    Base.notify_error(io.cond.cond_wait, Base.closed_exception())
+    return nothing
+end
+Base.isopen(io::PrefechedDownloadStream) = isopen(io.prefetch_queue)
 function getbuffer(io::PrefechedDownloadStream)
     buf = io.buf
     if isnothing(buf)

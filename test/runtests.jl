@@ -41,7 +41,8 @@ check(x::String, y::AbstractVector{UInt8}) = read(x) == y
 check(x::IO, y::AbstractVector{UInt8}) = begin; reset!(x); z = read(x) == y; reset!(x); z end
 check(x, y) = begin; reset!(x); reset!(y); z = read(x) == read(y); reset!(x); reset!(y); z end
 
-@time @testset "S3" begin
+@testset "CloudStore.jl" begin
+@testset "S3" begin
     # conf, p = Minio.run(; debug=true)
     Minio.with(; debug=true) do conf
         credentials, bucket = conf
@@ -411,3 +412,4 @@ end
         end
     end
 end
+end # @testset "CloudStore.jl"
