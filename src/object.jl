@@ -67,33 +67,40 @@ function _prefetching_task(io)
     len = io.len
     ppos = 0
     download_buffer = Vector{UInt8}(undef, prefetch_size)
-    download_buffer_next = Vector{UInt8}(undef, prefetch_size)
+    # Don't allocate the second buffer when we can fit everything to the first one
+    download_buffer_next = len == prefetch_size ? download_buffer : Vector{UInt8}(undef, prefetch_size)
 
-    while len > ppos
-        n = min(len - ppos, prefetch_size)
-        off = 0
-        # `partition` plays nicely with 1-based ranges, but we need zero based ranges for
-        # `contentRange`
-        rngs = Iterators.partition(ppos+1:ppos+n, io.prefetch_multipart_size)
-        io.cond.ntasks = length(rngs)
-        for rng in rngs
-            put!(io.download_queue, (off, rng .- 1, download_buffer))
-            off += length(rng)
-        end
-        @lock io.cond.cond_wait begin
-            while true
-                io.cond.ntasks == 0 && break
-                wait(io.cond.cond_wait)
+    try
+        while len > ppos
+            n = min(len - ppos, prefetch_size)
+            off = 0
+            # `partition` plays nicely with 1-based ranges, but we need zero based ranges for
+            # `contentRange`
+            rngs = Iterators.partition(ppos+1:ppos+n, io.prefetch_multipart_size)
+            io.cond.ntasks = length(rngs)
+            for rng in rngs
+                put!(io.download_queue, (off, rng .- 1, download_buffer))
+                off += length(rng)
             end
-        end
+            Base.@lock io.cond.cond_wait begin
+                while true
+                    io.cond.ntasks == 0 && break
+                    wait(io.cond.cond_wait)
+                end
+            end
 
-        buf = PrefetchBuffer(download_buffer, 1, n)
-        ppos += n
-        put!(io.prefetch_queue, buf)
-        download_buffer, download_buffer_next = download_buffer_next, download_buffer
+            buf = PrefetchBuffer(download_buffer, 1, n)
+            ppos += n
+            put!(io.prefetch_queue, buf)
+            download_buffer, download_buffer_next = download_buffer_next, download_buffer
+        end
+    catch e
+        close(io.download_queue, e)
+        close(io.prefetch_queue, e)
+        rethrow()
     end
-    close(io.prefetch_queue)
     close(io.download_queue)
+    close(io.prefetch_queue)
     return nothing
 end
 
@@ -104,18 +111,26 @@ function _download_task(io)
     credentials = object.credentials
     response_stream = IOBuffer(view(UInt8[], 1:0), write=true, maxsize=io.prefetch_multipart_size)
 
-    while true
-        (off, rng, download_buffer) = take!(io.download_queue)
-        HTTP.setheader(headers, contentRange(rng))
-        buffer_view = view(download_buffer, off + 1:off + length(rng))
-        response_stream.data = buffer_view
-        response_stream.maxsize = length(buffer_view)
-        seekstart(response_stream)
-        _ = getObject(object.store, url, headers; credentials, response_stream)
+    try
+        while true
+            (off, rng, download_buffer) = take!(io.download_queue)
+            HTTP.setheader(headers, contentRange(rng))
+            buffer_view = view(download_buffer, off + 1:off + length(rng))
+            response_stream.data = buffer_view
+            response_stream.maxsize = length(buffer_view)
+            seekstart(response_stream)
+            _ = getObject(object.store, url, headers; credentials, response_stream)
 
-        @lock io.cond.cond_wait begin
-            io.cond.ntasks -= 1
-            notify(io.cond.cond_wait)
+            Base.@lock io.cond.cond_wait begin
+                io.cond.ntasks -= 1
+                notify(io.cond.cond_wait)
+            end
+        end
+    catch e
+        isopen(io.prefetch_queue) && close(io.prefetch_queue, e)
+        isopen(io.download_queue) && close(io.download_queue, e)
+        Base.@lock io.cond.cond_wait begin
+            notify(io.cond.cond_wait, e, all=true, error=true)
         end
     end
     return nothing
@@ -183,6 +198,8 @@ function Base.close(io::PrefechedDownloadStream)
     return nothing
 end
 Base.isopen(io::PrefechedDownloadStream) = isopen(io.prefetch_queue)
+Base.filesize(io::PrefechedDownloadStream) = io.len
+
 function getbuffer(io::PrefechedDownloadStream)
     buf = io.buf
     if isnothing(buf)
