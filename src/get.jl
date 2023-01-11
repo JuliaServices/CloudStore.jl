@@ -55,6 +55,13 @@ function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType=noth
         # make a head request to see if the object happens to be empty
         # if so, it isn't valid to make a Range bytes request, so we'll short-circuit
         resp = API.headObject(x, url, headers; kw...)
+        if HTTP.isredirect(resp)
+            try
+                throw(HTTP.StatusError(resp.status, resp.request.method, resp.request.target, resp))
+            catch
+                throw(ArgumentError("Invalid object key: $key"))
+            end
+        end
         if HTTP.header(resp, "Content-Length") == "0"
             if out === nothing
                 return resp.body
