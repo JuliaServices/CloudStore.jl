@@ -136,7 +136,7 @@ function _download_task(io)
     return nothing
 end
 
-mutable struct PrefechedDownloadStream{T <: Object} <: IO
+mutable struct PrefetchedDownloadStream{T <: Object} <: IO
     object::T
     pos::Int
     len::Int
@@ -147,7 +147,7 @@ mutable struct PrefechedDownloadStream{T <: Object} <: IO
     download_queue::Channel{Tuple{Int,UnitRange{Int},Vector{UInt8}}}
     cond::TaskCondition
 
-    function PrefechedDownloadStream(
+    function PrefetchedDownloadStream(
         object::T,
         prefetch_size::Int=DEFAULT_PREFETCH_SIZE;
         prefetch_multipart_size::Int=DEFAULT_PREFETCH_MULTIPART_SIZE
@@ -174,7 +174,7 @@ mutable struct PrefechedDownloadStream{T <: Object} <: IO
         return io
     end
 
-    function PrefechedDownloadStream(
+    function PrefetchedDownloadStream(
         store::AbstractStore,
         key::String,
         prefetch_size::Int=DEFAULT_PREFETCH_SIZE;
@@ -186,21 +186,21 @@ mutable struct PrefechedDownloadStream{T <: Object} <: IO
         len = parse(Int, HTTP.header(resp, "Content-Length", "0"))
         et = etag(HTTP.header(resp, "ETag", ""))
         object = Object(store, credentials, String(key), Int(len), String(et))
-        return PrefechedDownloadStream(object, prefetch_size; prefetch_multipart_size)
+        return PrefetchedDownloadStream(object, prefetch_size; prefetch_multipart_size)
     end
 end
-Base.eof(io::PrefechedDownloadStream) = io.pos >= io.len
-Base.bytesavailable(io::PrefechedDownloadStream) = io.len - io.pos + 1
-function Base.close(io::PrefechedDownloadStream)
+Base.eof(io::PrefetchedDownloadStream) = io.pos >= io.len
+Base.bytesavailable(io::PrefetchedDownloadStream) = io.len - io.pos + 1
+function Base.close(io::PrefetchedDownloadStream)
     close(io.prefetch_queue)
     close(io.download_queue)
     Base.notify_error(io.cond.cond_wait, Base.closed_exception())
     return nothing
 end
-Base.isopen(io::PrefechedDownloadStream) = isopen(io.prefetch_queue)
-Base.filesize(io::PrefechedDownloadStream) = io.len
+Base.isopen(io::PrefetchedDownloadStream) = isopen(io.prefetch_queue)
+Base.filesize(io::PrefetchedDownloadStream) = io.len
 
-function getbuffer(io::PrefechedDownloadStream)
+function getbuffer(io::PrefetchedDownloadStream)
     buf = io.buf
     if isnothing(buf)
         buf = take!(io.prefetch_queue)
@@ -209,7 +209,7 @@ function getbuffer(io::PrefechedDownloadStream)
     return buf
 end
 
-function _unsafe_read(io::PrefechedDownloadStream, dest::Ptr{UInt8}, bytes_to_read::Int)
+function _unsafe_read(io::PrefetchedDownloadStream, dest::Ptr{UInt8}, bytes_to_read::Int)
     bytes_read = 0
     while bytes_to_read > bytes_read
         buf = getbuffer(io)::PrefetchBuffer
@@ -228,7 +228,7 @@ function _unsafe_read(io::PrefechedDownloadStream, dest::Ptr{UInt8}, bytes_to_re
     return bytes_read
 end
 
-function Base.readbytes!(io::PrefechedDownloadStream, dest::AbstractVector{UInt8}, n)
+function Base.readbytes!(io::PrefetchedDownloadStream, dest::AbstractVector{UInt8}, n)
     eof(io) && return UInt32(0)
     bytes_to_read = min(bytesavailable(io), Int(n))
     bytes_to_read > length(dest) && resize!(dest, bytes_to_read)
@@ -236,7 +236,7 @@ function Base.readbytes!(io::PrefechedDownloadStream, dest::AbstractVector{UInt8
     return UInt32(bytes_read)
 end
 
-function Base.unsafe_read(io::PrefechedDownloadStream, p::Ptr{UInt8}, nb::UInt)
+function Base.unsafe_read(io::PrefetchedDownloadStream, p::Ptr{UInt8}, nb::UInt)
     if eof(io)
         nb > 0 && throw(EOFError())
         return nothing
