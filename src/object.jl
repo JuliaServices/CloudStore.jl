@@ -194,7 +194,9 @@ Base.bytesavailable(io::PrefetchedDownloadStream) = io.len - io.pos + 1
 function Base.close(io::PrefetchedDownloadStream)
     close(io.prefetch_queue)
     close(io.download_queue)
-    Base.notify_error(io.cond.cond_wait, Base.closed_exception())
+    Base.@lock io.cond.cond_wait begin
+        Base.notify_error(io.cond.cond_wait, Base.closed_exception())
+    end
     return nothing
 end
 Base.isopen(io::PrefetchedDownloadStream) = isopen(io.prefetch_queue)
