@@ -197,19 +197,8 @@ mutable struct PrefetchedDownloadStream{T <: Object} <: IO
 end
 Base.eof(io::PrefetchedDownloadStream) = io.pos >= io.len
 bytesremaining(io::PrefetchedDownloadStream) = io.len - io.pos + 1
-# NOTE: bytesavailable is the number of bytes in the buffer, not the filesize
 function Base.bytesavailable(io::PrefetchedDownloadStream)
-    buf = io.buf
-    if isnothing(buf)
-        if isopen(io.prefetch_queue)
-            buf = take!(io.prefetch_queue)
-            io.buf = buf
-            return bytesavailable(buf)
-        end
-    else
-        return bytesavailable(buf)
-    end
-    return 0
+    return isnothing(io.buf) ? 0 : bytesavailable(io.buf::PrefetchBuffer)
 end
 function Base.close(io::PrefetchedDownloadStream)
     close(io.prefetch_queue)
@@ -217,13 +206,13 @@ function Base.close(io::PrefetchedDownloadStream)
     Base.@lock io.cond.cond_wait begin
         Base.notify_error(io.cond.cond_wait, Base.closed_exception())
     end
-    if isnothing(io.buf)
+    if !isnothing(io.buf)
         resize!(io.buf.data, 0)
         io.buf = nothing
     end
     return nothing
 end
-Base.isopen(io::PrefetchedDownloadStream) = (io.len > io.pos && isopen(io.prefetch_queue)) || bytesavailable(io) > 0
+Base.isopen(io::PrefetchedDownloadStream) = !(isnothing(io.buf) && !isopen(io.prefetch_queue))
 Base.iswritable(io::PrefetchedDownloadStream) = false
 Base.filesize(io::PrefetchedDownloadStream) = io.len
 function Base.peek(io::PrefetchedDownloadStream, ::Type{T}) where {T<:Integer}
@@ -286,4 +275,19 @@ function Base.unsafe_read(io::PrefetchedDownloadStream, p::Ptr{UInt8}, nb::UInt)
     _unsafe_read(io, p, min(avail, Int(nb)))
     nb > avail && throw(EOFError())
     return nothing
+end
+
+# TranscodingStreams.jl are calling this method when Base.bytesavailable is zero
+# to trigger buffer refill
+function Base.read(io::PrefetchedDownloadStream, ::Type{UInt8})
+    eof(io) && throw(EOFError())
+    buf = getbuffer(io)
+    @inbounds b = buf.data[buf.pos]
+    buf.pos += 1
+    io.pos += 1
+
+    if buf.pos > buf.len
+        io.buf = nothing
+    end
+    return b
 end
