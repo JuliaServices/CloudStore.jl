@@ -167,10 +167,16 @@ mutable struct PrefetchedDownloadStream{T <: Object} <: IO
         )
         prefetch_size > 0 || throw(ArgumentError("`prefetch_size` must be positive, got $prefetch_size"))
         prefetch_multipart_size > 0 || throw(ArgumentError("`prefetch_multipart_size` must be positive, got $prefetch_multipart_size"))
-        for _ in 1:min(Threads.nthreads(), max(1, div(size, io.prefetch_multipart_size)))
-            Threads.@spawn _download_task($io)
+        if size > 0
+            for _ in 1:min(Threads.nthreads(), max(1, div(size, io.prefetch_multipart_size)))
+                Threads.@spawn _download_task($io)
+            end
+            Threads.@spawn _prefetching_task($io)
+        else
+            close(io.download_queue)
+            close(io.prefetch_queue)
+            io.buf = PrefetchBuffer(UInt8[], 1, 0)
         end
-        Threads.@spawn _prefetching_task($io)
         return io
     end
 

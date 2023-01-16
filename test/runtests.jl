@@ -361,8 +361,6 @@ end
     end
 end
 
-
-
 @testset "CloudStore.PrefetchedDownloadStream small readbytes! decompress" begin
     Minio.with(; debug=true) do conf
         credentials, bucket = conf
@@ -412,4 +410,61 @@ end
         end
     end
 end
+
+@testset "CloudStore.PrefetchedDownloadStream empty file readbytes! decompress" begin
+    Minio.with(; debug=true) do conf
+        credentials, bucket = conf
+        multicsv = ""; # 0 MB
+        codec = ZlibCompressor();
+        CodecZlib.initialize(codec)
+        compressed = transcode(codec, codeunits(multicsv))
+        S3.put(bucket, "test.csv.gz", compressed; credentials)
+        CodecZlib.finalize(codec)
+        obj = CloudStore.Object(bucket, "test.csv.gz"; credentials)
+        @test length(obj) == sizeof(compressed)
+
+        N = 1024*1024
+        buf = ones(UInt8, N)
+        ioobj = GzipDecompressorStream(CloudStore.PrefetchedDownloadStream(bucket, "test.csv.gz", 1024*1024; credentials))
+        readbytes!(ioobj, buf, N)
+        @test eof(ioobj)
+        @test all(buf .== 1)
+    end
+end
+
+
+@testset "CloudStore.PrefetchedDownloadStream empty file readbytes!" begin
+    Minio.with(; debug=true) do conf
+        credentials, bucket = conf
+        multicsv = ""; # 0 MB
+        S3.put(bucket, "test.csv", codeunits(multicsv); credentials)
+        obj = CloudStore.Object(bucket, "test.csv"; credentials)
+        @test length(obj) == sizeof(multicsv)
+
+        N = 1024*1024
+        buf = ones(UInt8, N)
+        ioobj = CloudStore.PrefetchedDownloadStream(bucket, "test.csv", 1024*1024; credentials)
+        readbytes!(ioobj, buf, N)
+        @test eof(ioobj)
+        @test all(buf .== 1)
+    end
+end
+
+@testset "CloudStore.PrefetchedDownloadStream empty file unsafe_read" begin
+    Minio.with(; debug=true) do conf
+        credentials, bucket = conf
+        multicsv = ""; # 0 MB
+        S3.put(bucket, "test.csv", codeunits(multicsv); credentials)
+        obj = CloudStore.Object(bucket, "test.csv"; credentials)
+        @test length(obj) == sizeof(multicsv)
+
+        N = 1024*1024
+        buf = ones(UInt8, N)
+        ioobj = CloudStore.PrefetchedDownloadStream(bucket, "test.csv", 1024*1024; credentials)
+        @test_throws EOFError unsafe_read(ioobj, pointer(buf), N)
+        @test eof(ioobj)
+        @test all(buf .== 1)
+    end
+end
+
 end # @testset "CloudStore.jl"
