@@ -196,17 +196,50 @@ mutable struct PrefetchedDownloadStream{T <: Object} <: IO
     end
 end
 Base.eof(io::PrefetchedDownloadStream) = io.pos >= io.len
-Base.bytesavailable(io::PrefetchedDownloadStream) = io.len - io.pos + 1
+bytesremaining(io::PrefetchedDownloadStream) = io.len - io.pos + 1
+# NOTE: bytesavailable is the number of bytes in the buffer, not the filesize
+function Base.bytesavailable(io::PrefetchedDownloadStream)
+    buf = io.buf
+    if isnothing(buf)
+        if isopen(io.prefetch_queue)
+            buf = take!(io.prefetch_queue)
+            io.buf = buf
+            return bytesavailable(buf)
+        end
+    else
+        return bytesavailable(buf)
+    end
+    return 0
+end
 function Base.close(io::PrefetchedDownloadStream)
     close(io.prefetch_queue)
     close(io.download_queue)
     Base.@lock io.cond.cond_wait begin
         Base.notify_error(io.cond.cond_wait, Base.closed_exception())
     end
+    if isnothing(io.buf)
+        resize!(io.buf.data, 0)
+        io.buf = nothing
+    end
     return nothing
 end
-Base.isopen(io::PrefetchedDownloadStream) = isopen(io.prefetch_queue)
+Base.isopen(io::PrefetchedDownloadStream) = (io.len > io.pos && isopen(io.prefetch_queue)) || bytesavailable(io) > 0
+Base.iswritable(io::PrefetchedDownloadStream) = false
 Base.filesize(io::PrefetchedDownloadStream) = io.len
+function Base.peek(io::PrefetchedDownloadStream, ::Type{T}) where {T<:Integer}
+    eof(io) && throw(EOFError())
+    buf = getbuffer(io)
+    # TODO: allow cross-buffer peeking
+    bytesavailable(buf) < sizeof(T) && error(string(
+        "Cannot peak ahead $(sizeof(T)) bytes for T=$T, there are only",
+        "$(bytesavailable(buf)) bytes in the current buffer."
+    ))
+    GC.@preserve buf begin
+        ptr::Ptr{T} = pointer(buf.data, buf.pos)
+        x = unsafe_load(ptr)
+    end
+    return x
+end
 
 function getbuffer(io::PrefetchedDownloadStream)
     buf = io.buf
@@ -220,7 +253,7 @@ end
 function _unsafe_read(io::PrefetchedDownloadStream, dest::Ptr{UInt8}, bytes_to_read::Int)
     bytes_read = 0
     while bytes_to_read > bytes_read
-        buf = getbuffer(io)::PrefetchBuffer
+        buf = getbuffer(io)
         bytes_in_buffer = bytesavailable(buf)
 
         adv = min(bytes_in_buffer, bytes_to_read - bytes_read)
@@ -238,7 +271,7 @@ end
 
 function Base.readbytes!(io::PrefetchedDownloadStream, dest::AbstractVector{UInt8}, n)
     eof(io) && return UInt32(0)
-    bytes_to_read = min(bytesavailable(io), Int(n))
+    bytes_to_read = min(bytesremaining(io), Int(n))
     bytes_to_read > length(dest) && resize!(dest, bytes_to_read)
     bytes_read = GC.@preserve dest _unsafe_read(io, pointer(dest), bytes_to_read)
     return UInt32(bytes_read)
@@ -249,7 +282,7 @@ function Base.unsafe_read(io::PrefetchedDownloadStream, p::Ptr{UInt8}, nb::UInt)
         nb > 0 && throw(EOFError())
         return nothing
     end
-    avail = bytesavailable(io)
+    avail = bytesremaining(io)
     _unsafe_read(io, p, min(avail, Int(nb)))
     nb > avail && throw(EOFError())
     return nothing

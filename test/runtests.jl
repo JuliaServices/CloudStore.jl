@@ -467,4 +467,27 @@ end
     end
 end
 
+@testset "CloudStore.PrefetchedDownloadStream peek" begin
+    Minio.with(; debug=true) do conf
+        credentials, bucket = conf
+        data = "0123456789123456"; # 16 B
+        S3.put(bucket, "test.txt", codeunits(data); credentials)
+        obj = CloudStore.Object(bucket, "test.txt"; credentials)
+        @test length(obj) == sizeof(data)
+
+        ioobj = CloudStore.PrefetchedDownloadStream(bucket, "test.txt", 16; credentials)
+        iobuf = IOBuffer(data)
+        @test peek(ioobj, Int8) == peek(iobuf, Int8)
+        @test peek(ioobj, UInt8) == peek(iobuf, UInt8)
+        @test peek(ioobj, Int16) == peek(iobuf, Int16)
+        @test peek(ioobj, UInt16) == peek(iobuf, UInt16)
+        @test peek(ioobj, Int32) == peek(iobuf, Int32)
+        @test peek(ioobj, UInt32) == peek(iobuf, UInt32)
+        @test peek(ioobj, Int64) == peek(iobuf, Int64)
+        @test peek(ioobj, UInt64) == peek(iobuf, UInt64)
+        @test peek(ioobj, Int128) == peek(iobuf, Int128)
+        @test peek(ioobj, UInt128) == peek(iobuf, UInt128)
+    end
+end
+
 end # @testset "CloudStore.jl"
