@@ -21,6 +21,13 @@ Object(
 function Object(store::AbstractStore, key::String; credentials::Union{CloudCredentials, Nothing}=nothing)
     url = makeURL(store, key)
     resp = API.headObject(store, url, HTTP.Headers(); credentials=credentials)
+    if HTTP.isredirect(resp)
+        try
+            throw(HTTP.StatusError(resp.status, resp.request.method, resp.request.target, resp))
+        catch
+            throw(ArgumentError("Invalid object key: $key"))
+        end
+    end
     size = parse(Int, HTTP.header(resp, "Content-Length", "0"))
     #TODO: get eTag
     et = etag(HTTP.header(resp, "ETag", ""))
