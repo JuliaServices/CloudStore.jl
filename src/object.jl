@@ -196,6 +196,13 @@ mutable struct PrefetchedDownloadStream{T <: Object} <: IO
     )
         url = makeURL(store, key)
         resp = API.headObject(store, url, HTTP.Headers(); credentials=credentials)
+        if HTTP.isredirect(resp)
+            try
+                throw(HTTP.StatusError(resp.status, resp.request.method, resp.request.target, resp))
+            catch
+                throw(ArgumentError("Invalid object key: $key"))
+            end
+        end
         len = parse(Int, HTTP.header(resp, "Content-Length", "0"))
         et = etag(HTTP.header(resp, "ETag", ""))
         object = Object(store, credentials, String(key), Int(len), String(et))
