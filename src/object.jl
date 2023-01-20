@@ -21,6 +21,7 @@ Object(
 function Object(store::AbstractStore, key::String; credentials::Union{CloudCredentials, Nothing}=nothing)
     url = makeURL(store, key)
     resp = API.headObject(store, url, HTTP.Headers(); credentials=credentials)
+    # The ArgumentError will be caused by the HTTP error to provide more context
     if HTTP.isredirect(resp)
         try
             throw(HTTP.StatusError(resp.status, resp.request.method, resp.request.target, resp))
@@ -196,6 +197,7 @@ mutable struct PrefetchedDownloadStream{T <: Object} <: IO
     )
         url = makeURL(store, key)
         resp = API.headObject(store, url, HTTP.Headers(); credentials=credentials)
+        # The ArgumentError will be caused by the HTTP error to provide more context
         if HTTP.isredirect(resp)
             try
                 throw(HTTP.StatusError(resp.status, resp.request.method, resp.request.target, resp))
