@@ -18,9 +18,9 @@ Object(
     size::Integer,
     eTag::AbstractString) = Object(store, creds, String(key), Int(size), String(eTag))
 
-function Object(store::AbstractStore, key::String; credentials::Union{CloudCredentials, Nothing}=nothing)
+function Object(store::AbstractStore, key::String; credentials::Union{CloudCredentials, Nothing}=nothing, kw...)
     url = makeURL(store, key)
-    resp = API.headObject(store, url, HTTP.Headers(); credentials=credentials)
+    resp = API.headObject(store, url, HTTP.Headers(); credentials=credentials, kw...)
     # The ArgumentError will be caused by the HTTP error to provide more context
     if HTTP.isredirect(resp)
         try
@@ -46,11 +46,11 @@ function Base.copyto!(dest::AbstractVector{UInt8}, doff::Integer, src::Object, s
     return unsafe_copyto!(dest, doff, src, soff, n)
 end
 
-function getRange(src::Object, soff::Integer, n::Integer)
+function getRange(src::Object, soff::Integer, n::Integer; kw...)
     headers = HTTP.Headers()
     HTTP.setheader(headers, contentRange((soff - 1):(soff + n - 2)))
     url = makeURL(src.store, src.key)
-    return getObject(src.store, url, headers; credentials=src.credentials).body
+    return getObject(src.store, url, headers; credentials=src.credentials, kw...).body
 end
 
 function Base.unsafe_copyto!(dest::AbstractVector{UInt8}, doff::Integer, src::Object, soff::Integer, n::Integer)
@@ -112,7 +112,7 @@ function _prefetching_task(io)
     return nothing
 end
 
-function _download_task(io)
+function _download_task(io; kw...)
     headers = HTTP.Headers()
     object = io.object
     url = makeURL(object.store, io.object.key)
@@ -127,7 +127,7 @@ function _download_task(io)
             response_stream.data = buffer_view
             response_stream.maxsize = length(buffer_view)
             seekstart(response_stream)
-            _ = getObject(object.store, url, headers; credentials, response_stream)
+            _ = getObject(object.store, url, headers; credentials, response_stream, kw...)
 
             Base.@lock io.cond.cond_wait begin
                 io.cond.ntasks -= 1
@@ -158,7 +158,8 @@ mutable struct PrefetchedDownloadStream{T <: Object} <: IO
     function PrefetchedDownloadStream(
         object::T,
         prefetch_size::Int=DEFAULT_PREFETCH_SIZE;
-        prefetch_multipart_size::Int=DEFAULT_PREFETCH_MULTIPART_SIZE
+        prefetch_multipart_size::Int=DEFAULT_PREFETCH_MULTIPART_SIZE,
+        kw...
     ) where {T<:Object}
         len = length(object)
         size = min(prefetch_size, len)
@@ -177,7 +178,7 @@ mutable struct PrefetchedDownloadStream{T <: Object} <: IO
         prefetch_multipart_size > 0 || throw(ArgumentError("`prefetch_multipart_size` must be positive, got $prefetch_multipart_size"))
         if size > 0
             for _ in 1:min(Threads.nthreads(), max(1, div(size, io.prefetch_multipart_size)))
-                Threads.@spawn _download_task($io)
+                Threads.@spawn _download_task($io; $kw...)
             end
             Threads.@spawn _prefetching_task($io)
         else
@@ -194,9 +195,10 @@ mutable struct PrefetchedDownloadStream{T <: Object} <: IO
         prefetch_size::Int=DEFAULT_PREFETCH_SIZE;
         credentials::Union{CloudCredentials, Nothing}=nothing,
         prefetch_multipart_size::Int=DEFAULT_PREFETCH_MULTIPART_SIZE,
+        kw...,
     )
         url = makeURL(store, key)
-        resp = API.headObject(store, url, HTTP.Headers(); credentials=credentials)
+        resp = API.headObject(store, url, HTTP.Headers(); credentials=credentials, kw...)
         # The ArgumentError will be caused by the HTTP error to provide more context
         if HTTP.isredirect(resp)
             try
@@ -208,7 +210,7 @@ mutable struct PrefetchedDownloadStream{T <: Object} <: IO
         len = parse(Int, HTTP.header(resp, "Content-Length", "0"))
         et = etag(HTTP.header(resp, "ETag", ""))
         object = Object(store, credentials, String(key), Int(len), String(et))
-        return PrefetchedDownloadStream(object, prefetch_size; prefetch_multipart_size)
+        return PrefetchedDownloadStream(object, prefetch_size; prefetch_multipart_size, kw...)
     end
 end
 Base.eof(io::PrefetchedDownloadStream) = io.pos >= io.len
