@@ -277,11 +277,11 @@ function _unsafe_read(io::PrefetchedDownloadStream, dest::Ptr{UInt8}, bytes_to_r
 end
 
 function Base.readbytes!(io::PrefetchedDownloadStream, dest::AbstractVector{UInt8}, n)
-    eof(io) && return UInt32(0)
+    eof(io) && return 0
     bytes_to_read = min(bytesremaining(io), Int(n))
     bytes_to_read > length(dest) && resize!(dest, bytes_to_read)
     bytes_read = GC.@preserve dest _unsafe_read(io, pointer(dest), bytes_to_read)
-    return UInt32(bytes_read)
+    return bytes_read
 end
 
 function Base.unsafe_read(io::PrefetchedDownloadStream, p::Ptr{UInt8}, nb::UInt)
