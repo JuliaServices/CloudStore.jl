@@ -103,8 +103,8 @@ function _prefetching_task(io)
             download_buffer, download_buffer_next = download_buffer_next, download_buffer
         end
     catch e
-        close(io.download_queue, e)
-        close(io.prefetch_queue, e)
+        isopen(io.download_queue) && close(io.download_queue, e)
+        isopen(io.prefetch_queue) && close(io.prefetch_queue, e)
         rethrow()
     end
     close(io.download_queue)
@@ -144,6 +144,46 @@ function _download_task(io; kw...)
     return nothing
 end
 
+_ndownload_tasks(total_size, part_size, numthreads=Threads.nthreads()) =
+    min(numthreads, max(1, div(total_size, part_size, RoundUp)))
+
+"""
+    PrefetchedDownloadStream{T <: Object} <: IO
+
+A buffered, read-only, in-memory IO stream that fetches chunks from remote cloud `Object`.
+
+`prefetch_multipart_size` is the max size of any individual GET request in bytes
+(default $(Base.format_bytes(DEFAULT_PREFETCH_MULTIPART_SIZE))),
+`prefetch_size` is the size of a buffer that stores the fetched bytes and which is iterated
+when we consume/read the IO (default $(Base.format_bytes(DEFAULT_PREFETCH_SIZE))).
+
+Once you start reading from the prefetch buffer, a secondary buffer will began to be populated
+by multiple background download tasks (meaning that this object allocates `2*prefetch_size` bytes
+for buffers).
+These background tasks are `@spawn`ed when this object is instantiated and by default 4 tasks
+(~ `prefetch_size` / `prefetch_multipart_size`) are spawned for performing the GET requests +
+1 task is spawned to coordinate the prefetching process. Number of spawned tasks depends on the
+size of the input and the number of threads available (see [`_ndownload_tasks`](@ref) helper function).
+
+**Reading from this stream is not thread-safe**.
+
+## Examples
+```
+# Get an IO stream for a remote CSV file `test.csv` living in your S3 bucket
+io = PrefetchedDownloadStream(my_bucket, "test.csv"; credentials)
+
+# Integrates with TranscodingStreams, kwargs forwarded to requests
+using CodecZlib
+io = GzipDecompressorStream(
+    PrefetchedDownloadStream(my_bucket, "test.csv.gz"; credentials, retries=5)
+)
+
+# Up to 8 concurrent download tasks, each fetching 2MiB into 16MiB prefetch buffer.
+io = PrefetchedDownloadStream(
+    my_bucket, "test.csv", 16*1024*1024; credentials, prefetch_multipart_size=2*1024*1024)
+)
+```
+"""
 mutable struct PrefetchedDownloadStream{T <: Object} <: IO
     object::T
     pos::Int
@@ -161,6 +201,8 @@ mutable struct PrefetchedDownloadStream{T <: Object} <: IO
         prefetch_multipart_size::Int=DEFAULT_PREFETCH_MULTIPART_SIZE,
         kw...
     ) where {T<:Object}
+        prefetch_size > 0 || throw(ArgumentError("`prefetch_size` must be positive, got $prefetch_size"))
+        prefetch_multipart_size > 0 || throw(ArgumentError("`prefetch_multipart_size` must be positive, got $prefetch_multipart_size"))
         len = length(object)
         size = min(prefetch_size, len)
         io = new{T}(
@@ -174,10 +216,8 @@ mutable struct PrefetchedDownloadStream{T <: Object} <: IO
             Channel{Tuple{Int,UnitRange{Int},Vector{UInt8}}}(Inf),
             TaskCondition()
         )
-        prefetch_size > 0 || throw(ArgumentError("`prefetch_size` must be positive, got $prefetch_size"))
-        prefetch_multipart_size > 0 || throw(ArgumentError("`prefetch_multipart_size` must be positive, got $prefetch_multipart_size"))
         if size > 0
-            for _ in 1:min(Threads.nthreads(), max(1, div(size, io.prefetch_multipart_size)))
+            for _ in 1:_ndownload_tasks(size, io.prefetch_multipart_size)
                 Threads.@spawn _download_task($io; $kw...)
             end
             Threads.@spawn _prefetching_task($io)
@@ -219,8 +259,10 @@ function Base.bytesavailable(io::PrefetchedDownloadStream)
     return isnothing(io.buf) ? 0 : bytesavailable(io.buf::PrefetchBuffer)
 end
 function Base.close(io::PrefetchedDownloadStream)
-    close(io.prefetch_queue)
-    close(io.download_queue)
+    isopen(io.prefetch_queue) && close(io.prefetch_queue)
+    isopen(io.download_queue) && close(io.download_queue)
+    # In case `_prefetching_task` was waiting on `io.task_condition`, we error notify
+    # the same way closing a Channel notifies the Channel's conditions.
     Base.@lock io.cond.cond_wait begin
         Base.notify_error(io.cond.cond_wait, Base.closed_exception())
     end
