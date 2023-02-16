@@ -69,6 +69,38 @@ head(x::Azure.Container, key::String; kw...) = Blobs.head(x, key; kw...)
 put(x::Azure.Container, key::String, in::RequestBodyType; kw...) = Blobs.put(x, key, in; kw...)
 delete(x::Azure.Container, key::String; kw...) = Blobs.delete(x, key; kw...)
 
+# https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html
+function validate_bucket_name(bucket_name, accelerate)
+    !(3 <= length(bucket_name) <= 63) && error("Invalid bucket name $(repr(bucket_name)): Bucket names must be between 3 (min) and 63 (max) characters long.")
+    isnothing(match(r"[a-z0-9][\.\-a-z0-9]+[a-z0-9]", bucket_name)) && error("Invalid bucket name $(repr(bucket_name)): Bucket names can consist only of lowercase letters, numbers, dots (.), and hyphens (-). Bucket names must begin and end with a letter or number.")
+    occursin("..", bucket_name) && error("Invalid bucket name $(repr(bucket_name)): Bucket names must not contain two adjacent periods.")
+    split(bucket_name, '.') == 4 && all(!isnothing, tryparse(Int, s) for s in split(bucket_name, '.')) && error("Invalid bucket name $(repr(bucket_name)): Bucket names must not be formatted as an IP address (for example, 192.168.5.4)")
+    startswith(bucket_name, "xn--") && error("Invalid bucket name $(repr(bucket_name)): Bucket names must not start with the prefix `xn--`.")
+    endswith(bucket_name, "-s3alias") && error("Invalid bucket name $(repr(bucket_name)): Bucket names must not end with the suffix `-s3alias`.")
+    accelerate && occursin(".", bucket_name) && error("Invalid bucket name $(repr(bucket_name)): Buckets used with Amazon S3 Transfer Acceleration can't have dots (.) in their names.")
+    return bucket_name
+end
+
+# https://learn.microsoft.com/en-us/rest/api/storageservices/naming-and-referencing-containers--blobs--and-metadata
+function validate_container_name(container_name)
+    !(3 <= length(container_name) <= 63) && error("Invalid container name $(repr(container_name)): Container names must be between 3 (min) and 63 (max) characters long.")
+    isnothing(match(r"[a-z0-9][\-a-z0-9]+[a-z0-9]", container_name)) && error("Invalid container name $(repr(container_name)): Container names can consist only of lowercase letters, numbers and, and hyphens (-). Bucket names must begin and end with a letter or number.")
+    occursin("--", container_name) && error("Invalid container name $(repr(container_name)): Every dash (-) character must be immediately preceded and followed by a letter or number; consecutive dashes are not permitted in container names.")
+    return container_name
+end
+
+# https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
+function validate_key(key)
+    ncodeunits(key) > 1024 && error("Invalid key $(repr(key)): The key name must be shorter than 1025 bytes.")
+    return key
+end
+
+# https://learn.microsoft.com/en-us/rest/api/storageservices/naming-and-referencing-containers--blobs--and-metadata
+function validate_blob(blob)
+    ncodeunits(blob) > 1024 && error("Invalid blob $(repr(blob)): The blob name must be shorter than 1025 bytes.")
+    return blob
+end
+
 # try to parse cloud-specific url schemes and dispatch
 function parseAzureAccountContainerBlob(url; parseLocal::Bool=false)
     url = String(url)
