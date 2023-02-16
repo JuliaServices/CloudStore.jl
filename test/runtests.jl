@@ -492,22 +492,23 @@ end
 
 @testset "_ndownload_tasks" begin
     MB = 1024*1024
-    @test _ndownload_tasks(32MB, 64MB, 8) == 1
-    @test _ndownload_tasks(32MB, 32MB, 8) == 1
-    @test _ndownload_tasks(32MB, 16MB, 8) == 2
-    @test _ndownload_tasks(32MB, 8MB, 8) == 4
-    @test _ndownload_tasks(32MB, 4MB, 8) == 8
-    @test _ndownload_tasks(32MB, 2MB, 8) == 8
+    @test CloudStore.API._ndownload_tasks(32MB, 64MB, 8) == 1
+    @test CloudStore.API._ndownload_tasks(32MB, 32MB, 8) == 1
+    @test CloudStore.API._ndownload_tasks(32MB, 16MB, 8) == 2
+    @test CloudStore.API._ndownload_tasks(32MB, 8MB, 8) == 4
+    @test CloudStore.API._ndownload_tasks(32MB, 4MB, 8) == 8
+    @test CloudStore.API._ndownload_tasks(32MB, 2MB, 8) == 8
 
-    @test _ndownload_tasks(32MB, 16MB + 1, 8) == 3
-    @test _ndownload_tasks(32MB, 8MB + 1, 8) == 4
-    @test _ndownload_tasks(32MB, 8MB - 1, 8) == 5
-    @test _ndownload_tasks(32MB, 4MB + 1, 8) == 8
-    @test _ndownload_tasks(32MB, 4MB - 1, 8) == 8
+    @test CloudStore.API._ndownload_tasks(32MB, 16MB + 1, 8) == 2
+    @test CloudStore.API._ndownload_tasks(32MB, 16MB - 1, 8) == 3
+    @test CloudStore.API._ndownload_tasks(32MB, 8MB + 1, 8) == 4
+    @test CloudStore.API._ndownload_tasks(32MB, 8MB - 1, 8) == 5
+    @test CloudStore.API._ndownload_tasks(32MB, 4MB + 1, 8) == 8
+    @test CloudStore.API._ndownload_tasks(32MB, 4MB - 1, 8) == 8
 
-    @test _ndownload_tasks(32MB, 1, 8) == 8
-    @test _ndownload_tasks(32MB, 32MB, 8) == 1
-    @test _ndownload_tasks(32MB, 64MB, 8) == 1
+    @test CloudStore.API._ndownload_tasks(32MB, 1, 8) == 8
+    @test CloudStore.API._ndownload_tasks(32MB, 32MB, 8) == 1
+    @test CloudStore.API._ndownload_tasks(32MB, 64MB, 8) == 1
 end
 
 end # @testset "CloudStore.jl"
