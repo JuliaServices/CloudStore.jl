@@ -172,7 +172,7 @@ size of the input and the number of threads available (see [`_ndownload_tasks`](
 # Get an IO stream for a remote CSV file `test.csv` living in your S3 bucket
 io = PrefetchedDownloadStream(my_bucket, "test.csv"; credentials)
 
-# Integrates with TranscodingStreams, kwargs forwarded to requests
+# Integrates with TranscodingStreams; HTTP keyword arguments are forwarded to underlying HTTP requests
 using CodecZlib
 io = GzipDecompressorStream(
     PrefetchedDownloadStream(my_bucket, "test.csv.gz"; credentials, retries=5)
