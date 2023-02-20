@@ -70,7 +70,7 @@ end
 # https://learn.microsoft.com/en-us/rest/api/storageservices/naming-and-referencing-containers--blobs--and-metadata
 function validate_blob(blob)
     !(1 < ncodeunits(blob) <= 1024) && throw(ArgumentError("Validation failed for `blob` $(repr(blob)): A blob name must be at least one character long and cannot be more than 1,024 characters long, for blobs in Azure Storage."))
-    count('/', blob) > 253          && throw(ArgumentError("Validation failed for `blob` $(repr(blob)): The number of path segments comprising the blob name cannot exceed 254. A path segment is the string between consecutive delimiter characters (e.g., the forward slash '/') that corresponds to the name of a virtual directory."))
+    count(==('/'), blob) > 253      && throw(ArgumentError("Validation failed for `blob` $(repr(blob)): The number of path segments comprising the blob name cannot exceed 254. A path segment is the string between consecutive delimiter characters (e.g., the forward slash '/') that corresponds to the name of a virtual directory."))
     return blob
 end
 
