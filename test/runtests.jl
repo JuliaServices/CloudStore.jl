@@ -516,13 +516,14 @@ end
     @test CloudStore.API._ndownload_tasks(32MB, 8MB, 1) == 1
     @test CloudStore.API._ndownload_tasks(32MB, 4MB, 1) == 1
     @test CloudStore.API._ndownload_tasks(32MB, 2MB, 1) == 1
+
+    @test CloudStore.API._ndownload_tasks(0, 1, 1) == 1
 end
 
 @testset "parse" begin
     function parse_s3_url(;bucket="bucket-name", accelerate=true, region="us-east-1", key="key-name")
         isempty(region) || (region *= ".")
         accelerate_str = accelerate ? "s3-accelerate" : "s3"
-             "https://bucket-name.s3-accelerate.us-east-1.amazonaws.com/key-name"
         url = "https://$(bucket).$(accelerate_str).$(region)amazonaws.com/$(key)"
         return CloudStore.parseAWSBucketRegionKey(url; parseLocal=true)
     end
@@ -533,6 +534,8 @@ end
     end
 
     @testset "validate_bucket_name" begin
+        @test_throws ArgumentError CloudStore.validate_bucket_name("", false)
+        @test !parse_s3_url(bucket="", accelerate=false)[1]
         @test_throws ArgumentError CloudStore.validate_bucket_name("a", false)
         @test_throws ArgumentError parse_s3_url(bucket="a", accelerate=false)
         @test_throws ArgumentError CloudStore.validate_bucket_name("ab", false)
@@ -558,6 +561,8 @@ end
 
         @test_throws ArgumentError CloudStore.validate_bucket_name("a.bc", true)
         @test !parse_s3_url(bucket="a.bc", accelerate=true)[1]
+        @test_throws ArgumentError CloudStore.validate_bucket_name("", true)
+        @test !parse_s3_url(bucket="", accelerate=true)[1]
         @test_throws ArgumentError CloudStore.validate_bucket_name("a", true)
         @test_throws ArgumentError parse_s3_url(bucket="a", accelerate=true)
         @test_throws ArgumentError CloudStore.validate_bucket_name("ab", true)
@@ -587,6 +592,8 @@ end
     end
 
     @testset "validate_container_name" begin
+        @test_throws ArgumentError CloudStore.validate_container_name("")
+        @test !parse_azure_url(container="")[1]
         @test_throws ArgumentError CloudStore.validate_container_name("a")
         @test_throws ArgumentError parse_azure_url(container="a")
         @test_throws ArgumentError CloudStore.validate_container_name("ab")
@@ -644,6 +651,8 @@ end
     end
 
     @testset "validate_account_name" begin
+        @test_throws ArgumentError CloudStore.validate_account_name("")
+        @test !parse_azure_url(account="")[1]
         @test_throws ArgumentError CloudStore.validate_account_name("a")
         @test_throws ArgumentError parse_azure_url(account="a")
         @test_throws ArgumentError CloudStore.validate_account_name("aa")

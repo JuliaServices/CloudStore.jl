@@ -144,28 +144,46 @@ function _download_task(io; kw...)
     return nothing
 end
 
+# assumes part_size > 0
 _ndownload_tasks(total_size, part_size, numthreads=Threads.nthreads()) =
     min(numthreads, max(1, div(total_size, part_size, RoundUp)))
 
 """
     PrefetchedDownloadStream{T <: Object} <: IO
+    PrefetchedDownloadStream(args...; kwargs...) -> PrefetchedDownloadStream{T <: Object}
 
 A buffered, read-only, in-memory IO stream that fetches chunks from remote cloud `Object`.
 
-`prefetch_multipart_size` is the max size of any individual GET request in bytes
-(default $(Base.format_bytes(DEFAULT_PREFETCH_MULTIPART_SIZE))),
+Data is downloaded to two internal buffers. Once you start reading from the first buffer,
+a secondary buffer will begin to be "prefetched" by multiple background tasks. Once you read
+past the first buffer, the two buffers are switched and new round of prefetching begins.
+
+To control memory usage and speed, the user can change two parameters when constructing the
+stream: `prefetch_multipart_size` and `prefetch_size`. `prefetch_multipart_size` is the max
+size of any individual GET request in bytes (default $(Base.format_bytes(DEFAULT_PREFETCH_MULTIPART_SIZE))),
 `prefetch_size` is the size of a buffer that stores the fetched bytes and which is iterated
 when we consume/read the IO (default $(Base.format_bytes(DEFAULT_PREFETCH_SIZE))).
 
-Once you start reading from the prefetch buffer, a secondary buffer will began to be populated
-by multiple background download tasks (meaning that this object allocates `2*prefetch_size` bytes
-for buffers).
-These background tasks are `@spawn`ed when this object is instantiated and by default 4 tasks
-(~ `prefetch_size` / `prefetch_multipart_size`) are spawned for performing the GET requests +
-1 task is spawned to coordinate the prefetching process. Number of spawned tasks depends on the
-size of the input and the number of threads available (see [`_ndownload_tasks`](@ref) helper function).
+The numbef of spawned tasks is also governed by these two parameters, with approximately
+`prefetch_size` / `prefetch_multipart_size` tasks spawned for performing the GET requests
+(defaults to 4 if those fields aren't specified) + 1 task is spawned to coordinate the
+prefetching process. Number of spawned tasks is upper-bounded by the size of the input and
+the number of threads available (see [`_ndownload_tasks`](@ref) helper function).
 
 **Reading from this stream is not thread-safe**.
+
+# Arguments
+* `store::AbstractStore`: The S3 Bucket / Azure Container object
+* `key::String`: S3 key / Azure blob resource name
+* `prefetch_size::Int=DEFAULT_PREFETCH_SIZE`: The size of each of the two internal prefetch
+    buffers in bytes
+
+# Keywords
+* `credentials::Union{CloudCredentials, Nothing}=nothing`: Credentials object used in HTTP
+    requests
+* `prefetch_multipart_size::Int=DEFAULT_PREFETCH_MULTIPART_SIZE`: The size of each individual
+   GET request in bytes
+* `kwargs...`: HTTP keyword arguments are forwarded to underlying HTTP requests,
 
 ## Examples
 ```
