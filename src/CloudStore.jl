@@ -50,6 +50,8 @@ end # module API
 
 using .API
 
+include("parse.jl")
+
 # generic dispatches
 get(x::Object, out::ResponseBodyType=nothing; kw...) = get(x.store, x.key, out; kw...)
 head(x::Object; kw...) = head(x.store, x.key; kw...)
@@ -68,87 +70,6 @@ get(x::Azure.Container, key::String, out::ResponseBodyType=nothing; kw...) = Blo
 head(x::Azure.Container, key::String; kw...) = Blobs.head(x, key; kw...)
 put(x::Azure.Container, key::String, in::RequestBodyType; kw...) = Blobs.put(x, key, in; kw...)
 delete(x::Azure.Container, key::String; kw...) = Blobs.delete(x, key; kw...)
-
-# try to parse cloud-specific url schemes and dispatch
-function parseAzureAccountContainerBlob(url; parseLocal::Bool=false)
-    url = String(url)
-    # https://myaccount.blob.core.windows.net/mycontainer/myblob
-    # https://myaccount.blob.core.windows.net/mycontainer
-    m = match(r"^(https|azure)://(?<account>[^\.]+?)(\.blob\.core\.windows\.net)?/(?<container>[^/]+?)(?:/(?<blob>.+))?$", url)
-    m !== nothing && return (true, nothing, String(m[:account]), String(m[:container]), String(something(m[:blob], "")))
-    if parseLocal
-        # "https://127.0.0.1:45942/devstoreaccount1/jl-azurite-21807/"
-        m = match(r"^(?<host>(https|azure)://[\d|\.|:]+?)/(?<account>[^/]+?)/(?<container>[^/]+?)(?:/(?<blob>.+))?$", url)
-        m !== nothing && return (true, replace(String(m[:host]), "azure" => "https"; count=1), String(m[:account]), String(m[:container]), String(something(m[:blob], "")))
-    end
-    # azure://myaccount/mycontainer/myblob
-    # azure://myaccount/mycontainer
-    # azure://myaccount
-    m = match(r"^azure://(?<account>[^/]+)(?:/(?<container>.+))?(?:/(?<blob>.+))?$"i, url)
-    m !== nothing && return (true, nothing, String(m[:account]), String(something(m[:container], "")), String(something(m[:blob], "")))
-    return (false, nothing, "", "", "")
-end
-
-function parseAWSBucketRegionKey(url; parseLocal::Bool=false)
-    url = String(url)
-    # https://bucket-name.s3-accelerate.region-code.amazonaws.com/key-name
-    # https://bucket-name.s3-accelerate.region-code.amazonaws.com
-    # https://bucket-name.s3-accelerate.amazonaws.com/key-name
-    # https://bucket-name.s3-accelerate.amazonaws.com
-    # https://bucket-name.s3.region-code.amazonaws.com/key-name
-    # https://bucket-name.s3.region-code.amazonaws.com
-    # https://bucket-name.s3.amazonaws.com/key-name
-    # https://bucket-name.s3.amazonaws.com
-    m = match(r"^https://(?<bucket>[^\.]+)\.s3(?<accelerate>-accelerate)?(?:\.(?<region>[^\.]+))?\.amazonaws\.com(?:/(?<key>.+))?$", url)
-    m !== nothing && return (true, !isnothing(m[:accelerate]), nothing, String(m[:bucket]), String(something(m[:region], "")), String(something(m[:key], "")))
-    # https://s3.region-code.amazonaws.com/bucket-name/key-name
-    # https://s3.region-code.amazonaws.com/bucket-name
-    m = match(r"^https://s3(?:\.(?<region>[^\.]+))?\.amazonaws\.com/(?<bucket>[^/]+)(?:/(?<key>.+))?$", url)
-    m !== nothing && return (true, false, nothing, String(m[:bucket]), String(something(m[:region], "")), String(something(m[:key], "")))
-    if parseLocal
-        # "http://127.0.0.1:27181/jl-minio-4483/"
-        m = match(r"^(?<host>(http|s3)://[\d|\.|:]+?)/(?<bucket>[^/]+?)(?:/(?<key>.+))?$", url)
-        m !== nothing && return (true, false, replace(String(m[:host]), "s3" => "http"; count=1), String(m[:bucket]), "", String(something(m[:key], "")))
-    end
-    # S3://bucket-name/key-name
-    # S3://bucket-name
-    m = match(r"^s3://(?<bucket>[^/]+)(?:/(?<key>.+))?$"i, url)
-    m !== nothing && return (true, false, nothing, String(m[:bucket]), "", String(something(m[:key], "")))
-    return (false, false, nothing, "", "", "")
-end
-
-function parseGCPBucketObject(url)
-    url = String(url)
-    # https://storage.googleapis.com/BUCKET_NAME/OBJECT_NAME
-    # https://storage.googleapis.com/BUCKET_NAME
-    m = match(r"^https://storage\.googleapis\.com/(?<bucket>[^/]+)(?:/(?<key>.+))?$", url)
-    m !== nothing && return (true, String(m[:bucket]), String(something(m[:object], "")))
-    # https://BUCKET_NAME.storage.googleapis.com/OBJECT_NAME
-    # https://BUCKET_NAME.storage.googleapis.com
-    m = match(r"^https://(?<bucket>[^\.]+)\.storage\.googleapis\.com(?:/(?<key>.+))?$", url)
-    m !== nothing && return (true, String(m[:bucket]), String(something(m[:object], "")))
-    # https://storage.googleapis.com/download/storage/v1/b/BUCKET_NAME/o/OBJECT_NAME?alt=media
-    # https://storage.googleapis.com/download/storage/v1/b/BUCKET_NAME
-    m = match(r"^https://storage\.googleapis\.com/download/storage/v1/b/(?<bucket>[^/]+)(?:/o/(?<key>.+?))?(\?alt=media)?$", url)
-    m !== nothing && return (true, String(m[:bucket]), String(something(m[:object], "")))
-    return (false, "", "")
-end
-
-function parseURLForDispatch(url, region, nowarn)
-    # try to parse cloud-specific url schemes and dispatch
-    ok, accelerate, host, bucket, reg, key = parseAWSBucketRegionKey(url)
-    region = isempty(reg) ? region : reg
-    if ok && region === nothing
-        nowarn || @warn "`region` keyword argument not provided to `CloudStore.get` and undetected from url.  Defaulting to `us-east-1`"
-        region = AWS.AWS_DEFAULT_REGION
-    end
-    ok && return (AWS.Bucket(bucket, region; accelerate, host), key)
-    ok, host, account, container, blob = parseAzureAccountContainerBlob(url)
-    ok && return (Azure.Container(container, account; host), blob)
-    # ok, bucket, object = parseGCPBucketObject(url)
-    # ok && return (GCP.Bucket(bucket), object)
-    error("couldn't determine cloud from string url: `$url`")
-end
 
 function get(url::AbstractString, out::ResponseBodyType=nothing; region=nothing, nowarn::Bool=false, kw...)
     store, key = parseURLForDispatch(url, region, nowarn)

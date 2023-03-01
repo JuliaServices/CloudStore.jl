@@ -237,16 +237,16 @@ end
     end
 
     s3 = [
-        ("https://bucket-name.s3-accelerate.region-code.amazonaws.com/key-name", (true, true, nothing, "bucket-name", "region-code", "key-name")),
-        ("https://bucket-name.s3-accelerate.region-code.amazonaws.com", (true, true, nothing, "bucket-name", "region-code", "")),
+        ("https://bucket-name.s3-accelerate.us-east-1.amazonaws.com/key-name", (true, true, nothing, "bucket-name", "us-east-1", "key-name")),
+        ("https://bucket-name.s3-accelerate.us-east-1.amazonaws.com", (true, true, nothing, "bucket-name", "us-east-1", "")),
         ("https://bucket-name.s3-accelerate.amazonaws.com/key-name", (true, true, nothing, "bucket-name", "", "key-name")),
         ("https://bucket-name.s3-accelerate.amazonaws.com", (true, true, nothing, "bucket-name", "", "")),
-        ("https://bucket-name.s3.region-code.amazonaws.com/key-name", (true, false, nothing, "bucket-name", "region-code", "key-name")),
-        ("https://bucket-name.s3.region-code.amazonaws.com", (true, false, nothing, "bucket-name", "region-code", "")),
+        ("https://bucket-name.s3.us-east-1.amazonaws.com/key-name", (true, false, nothing, "bucket-name", "us-east-1", "key-name")),
+        ("https://bucket-name.s3.us-east-1.amazonaws.com", (true, false, nothing, "bucket-name", "us-east-1", "")),
         ("https://bucket-name.s3.amazonaws.com/key-name", (true, false, nothing, "bucket-name", "", "key-name")),
         ("https://bucket-name.s3.amazonaws.com", (true, false, nothing, "bucket-name", "", "")),
-        ("https://s3.region-code.amazonaws.com/bucket-name/key-name", (true, false, nothing, "bucket-name", "region-code", "key-name")),
-        ("https://s3.region-code.amazonaws.com/bucket-name", (true, false, nothing, "bucket-name", "region-code", "")),
+        ("https://s3.us-east-1.amazonaws.com/bucket-name/key-name", (true, false, nothing, "bucket-name", "us-east-1", "key-name")),
+        ("https://s3.us-east-1.amazonaws.com/bucket-name", (true, false, nothing, "bucket-name", "us-east-1", "")),
         ("https://s3.amazonaws.com/bucket-name/key-name", (true, false, nothing, "bucket-name", "", "key-name")),
         ("https://s3.amazonaws.com/bucket-name", (true, false, nothing, "bucket-name", "", "")),
         ("s3://bucket-name/key-name", (true, false, nothing, "bucket-name", "", "key-name")),
@@ -487,6 +487,189 @@ end
         @test peek(ioobj, UInt64) == peek(iobuf, UInt64)
         @test peek(ioobj, Int128) == peek(iobuf, Int128)
         @test peek(ioobj, UInt128) == peek(iobuf, UInt128)
+    end
+end
+
+@testset "_ndownload_tasks" begin
+    MB = 1024*1024
+    @test CloudStore.API._ndownload_tasks(32MB, 64MB, 8) == 1
+    @test CloudStore.API._ndownload_tasks(32MB, 32MB, 8) == 1
+    @test CloudStore.API._ndownload_tasks(32MB, 16MB, 8) == 2
+    @test CloudStore.API._ndownload_tasks(32MB, 8MB, 8) == 4
+    @test CloudStore.API._ndownload_tasks(32MB, 4MB, 8) == 8
+    @test CloudStore.API._ndownload_tasks(32MB, 2MB, 8) == 8
+
+    @test CloudStore.API._ndownload_tasks(32MB, 16MB + 1, 8) == 2
+    @test CloudStore.API._ndownload_tasks(32MB, 16MB - 1, 8) == 3
+    @test CloudStore.API._ndownload_tasks(32MB, 8MB + 1, 8) == 4
+    @test CloudStore.API._ndownload_tasks(32MB, 8MB - 1, 8) == 5
+    @test CloudStore.API._ndownload_tasks(32MB, 4MB + 1, 8) == 8
+    @test CloudStore.API._ndownload_tasks(32MB, 4MB - 1, 8) == 8
+
+    @test CloudStore.API._ndownload_tasks(32MB, 1, 8) == 8
+    @test CloudStore.API._ndownload_tasks(32MB, 32MB, 8) == 1
+    @test CloudStore.API._ndownload_tasks(32MB, 64MB, 8) == 1
+
+    @test CloudStore.API._ndownload_tasks(32MB, 64MB, 1) == 1
+    @test CloudStore.API._ndownload_tasks(32MB, 32MB, 1) == 1
+    @test CloudStore.API._ndownload_tasks(32MB, 16MB, 1) == 1
+    @test CloudStore.API._ndownload_tasks(32MB, 8MB, 1) == 1
+    @test CloudStore.API._ndownload_tasks(32MB, 4MB, 1) == 1
+    @test CloudStore.API._ndownload_tasks(32MB, 2MB, 1) == 1
+
+    @test CloudStore.API._ndownload_tasks(0, 1, 1) == 1
+end
+
+@testset "parse" begin
+    function parse_s3_url(;bucket="bucket-name", accelerate=true, region="us-east-1", key="key-name")
+        isempty(region) || (region *= ".")
+        accelerate_str = accelerate ? "s3-accelerate" : "s3"
+        url = "https://$(bucket).$(accelerate_str).$(region)amazonaws.com/$(key)"
+        return CloudStore.parseAWSBucketRegionKey(url; parseLocal=true)
+    end
+
+    function parse_azure_url(;account="myaccount", container="mycontainer", blob="myblob")
+        url = "https://$account.blob.core.windows.net/$container/$blob"
+        return CloudStore.parseAzureAccountContainerBlob(url; parseLocal=true)
+    end
+
+    @testset "validate_bucket_name" begin
+        @test_throws ArgumentError CloudStore.validate_bucket_name("", false)
+        @test !parse_s3_url(bucket="", accelerate=false)[1]
+        @test_throws ArgumentError CloudStore.validate_bucket_name("a", false)
+        @test_throws ArgumentError parse_s3_url(bucket="a", accelerate=false)
+        @test_throws ArgumentError CloudStore.validate_bucket_name("ab", false)
+        @test_throws ArgumentError parse_s3_url(bucket="ab", accelerate=false)
+        @test_throws ArgumentError CloudStore.validate_bucket_name("a"^64, false)
+        @test_throws ArgumentError parse_s3_url(bucket="a"^64, accelerate=false)
+        @test_throws ArgumentError CloudStore.validate_bucket_name("a..b", false)
+        @test !parse_s3_url(bucket="a..b", accelerate=false)[1]
+        @test_throws ArgumentError CloudStore.validate_bucket_name("xn--abc", false)
+        @test_throws ArgumentError parse_s3_url(bucket="xn--abc", accelerate=false)
+        @test_throws ArgumentError CloudStore.validate_bucket_name("abcs-s3alias", false)
+        @test_throws ArgumentError parse_s3_url(bucket="abcs-s3alias", accelerate=false)
+        @test_throws ArgumentError CloudStore.validate_bucket_name("abcA", false)
+        @test_throws ArgumentError parse_s3_url(bucket="abcA", accelerate=false)
+        @test_throws ArgumentError CloudStore.validate_bucket_name("abc-", false)
+        @test_throws ArgumentError parse_s3_url(bucket="abc-", accelerate=false)
+        @test_throws ArgumentError CloudStore.validate_bucket_name("-abc", false)
+        @test_throws ArgumentError parse_s3_url(bucket="-abc", accelerate=false)
+        @test_throws ArgumentError CloudStore.validate_bucket_name("a/bc", false)
+        @test_throws ArgumentError parse_s3_url(bucket="a/bc", accelerate=false)
+        @test_throws ArgumentError CloudStore.validate_bucket_name("192.168.5.4", false)
+        @test !parse_s3_url(bucket="192.168.5.4", accelerate=false)[1]
+
+        @test_throws ArgumentError CloudStore.validate_bucket_name("a.bc", true)
+        @test !parse_s3_url(bucket="a.bc", accelerate=true)[1]
+        @test_throws ArgumentError CloudStore.validate_bucket_name("", true)
+        @test !parse_s3_url(bucket="", accelerate=true)[1]
+        @test_throws ArgumentError CloudStore.validate_bucket_name("a", true)
+        @test_throws ArgumentError parse_s3_url(bucket="a", accelerate=true)
+        @test_throws ArgumentError CloudStore.validate_bucket_name("ab", true)
+        @test_throws ArgumentError parse_s3_url(bucket="ab", accelerate=true)
+        @test_throws ArgumentError CloudStore.validate_bucket_name("a"^64, true)
+        @test_throws ArgumentError parse_s3_url(bucket="a"^64, accelerate=true)
+        @test_throws ArgumentError CloudStore.validate_bucket_name("a..b", true)
+        @test !parse_s3_url(bucket="a..b", accelerate=true)[1]
+        @test_throws ArgumentError CloudStore.validate_bucket_name("xn--abc", true)
+        @test_throws ArgumentError parse_s3_url(bucket="xn--abc", accelerate=true)
+        @test_throws ArgumentError CloudStore.validate_bucket_name("abcs-s3alias", true)
+        @test_throws ArgumentError parse_s3_url(bucket="abcs-s3alias", accelerate=true)
+        @test_throws ArgumentError CloudStore.validate_bucket_name("abcA", true)
+        @test_throws ArgumentError parse_s3_url(bucket="abcA", accelerate=true)
+        @test_throws ArgumentError CloudStore.validate_bucket_name("abc-", true)
+        @test_throws ArgumentError parse_s3_url(bucket="abc-", accelerate=true)
+        @test_throws ArgumentError CloudStore.validate_bucket_name("-abc", true)
+        @test_throws ArgumentError parse_s3_url(bucket="-abc", accelerate=true)
+        @test_throws ArgumentError CloudStore.validate_bucket_name("a/bc", true)
+        @test_throws ArgumentError parse_s3_url(bucket="a/bc", accelerate=true)
+        @test_throws ArgumentError CloudStore.validate_bucket_name("192.168.5.4", true)
+        @test !parse_s3_url(bucket="192.168.5.4", accelerate=true)[1]
+
+        @test CloudStore.validate_bucket_name("a.b-c1", false) == "a.b-c1"
+        @test CloudStore.validate_bucket_name("a"^63, false) == "a"^63
+        @test CloudStore.validate_bucket_name("a"^3, false) == "a"^3
+    end
+
+    @testset "validate_container_name" begin
+        @test_throws ArgumentError CloudStore.validate_container_name("")
+        @test !parse_azure_url(container="")[1]
+        @test_throws ArgumentError CloudStore.validate_container_name("a")
+        @test_throws ArgumentError parse_azure_url(container="a")
+        @test_throws ArgumentError CloudStore.validate_container_name("ab")
+        @test_throws ArgumentError parse_azure_url(container="ab")
+        @test_throws ArgumentError CloudStore.validate_container_name("a"^64)
+        @test_throws ArgumentError parse_azure_url(container="a"^64)
+        @test_throws ArgumentError CloudStore.validate_container_name("a--b")
+        @test_throws ArgumentError parse_azure_url(container="a--b")
+        @test_throws ArgumentError CloudStore.validate_container_name("abcA")
+        @test_throws ArgumentError parse_azure_url(container="abcA")
+        @test_throws ArgumentError CloudStore.validate_container_name("abc-")
+        @test_throws ArgumentError parse_azure_url(container="abc-")
+        @test_throws ArgumentError CloudStore.validate_container_name("-abc")
+        @test_throws ArgumentError parse_azure_url(container="-abc")
+        @test_throws ArgumentError CloudStore.validate_container_name("a/bc")
+        @test_throws ArgumentError parse_azure_url(container="a/bc")
+        @test_throws ArgumentError CloudStore.validate_container_name("a.bc")
+        @test_throws ArgumentError parse_azure_url(container="a.bc")
+        @test_throws ArgumentError CloudStore.validate_container_name("192.168.5.4")
+        @test_throws ArgumentError parse_azure_url(container="192.168.5.4")
+
+        @test CloudStore.validate_container_name("ab-c1") == "ab-c1"
+        @test CloudStore.validate_container_name("a"^63) == "a"^63
+        @test CloudStore.validate_container_name("a"^3) == "a"^3
+    end
+
+    @testset "validate_key" begin
+        @test_throws ArgumentError CloudStore.validate_key("a"^1025)
+        @test_throws ArgumentError parse_s3_url(key="a"^1025)
+        @test_throws ArgumentError CloudStore.validate_key("a"^1026)
+        @test_throws ArgumentError parse_s3_url(key="a"^1026)
+
+        @test CloudStore.validate_key("a"^1024) == "a"^1024
+    end
+
+    @testset "validate_region" begin
+        @test_throws ArgumentError CloudStore.validate_region("no-region-1")
+        @test_throws ArgumentError parse_s3_url(region="no-region-1")
+
+        @test CloudStore.validate_key("us-east-1") == "us-east-1"
+    end
+
+    @testset "validate_blob" begin
+        @test_throws ArgumentError CloudStore.validate_blob("a"^1025)
+        @test_throws ArgumentError parse_azure_url(blob="a"^1025)
+        @test_throws ArgumentError CloudStore.validate_blob("a"^1026)
+        @test_throws ArgumentError parse_azure_url(blob="a"^1026)
+        @test_throws ArgumentError CloudStore.validate_blob(join(fill("a", 255), '/'))
+        @test_throws ArgumentError parse_azure_url(blob=join(fill("a", 255), '/'))
+        @test_throws ArgumentError CloudStore.validate_blob(join(fill("a", 256), '/'))
+        @test_throws ArgumentError parse_azure_url(blob=join(fill("a", 256), '/'))
+
+        @test CloudStore.validate_blob("a"^1024) == "a"^1024
+        @test CloudStore.validate_blob(join(fill("a", 254), '/')) == join(fill("a", 254), '/')
+    end
+
+    @testset "validate_account_name" begin
+        @test_throws ArgumentError CloudStore.validate_account_name("")
+        @test !parse_azure_url(account="")[1]
+        @test_throws ArgumentError CloudStore.validate_account_name("a")
+        @test_throws ArgumentError parse_azure_url(account="a")
+        @test_throws ArgumentError CloudStore.validate_account_name("aa")
+        @test_throws ArgumentError parse_azure_url(account="aa")
+        @test_throws ArgumentError CloudStore.validate_account_name("a"^25)
+        @test_throws ArgumentError parse_azure_url(account="a"^25)
+        @test_throws ArgumentError CloudStore.validate_account_name("a"^26)
+        @test_throws ArgumentError parse_azure_url(account="a"^26)
+        @test_throws ArgumentError CloudStore.validate_account_name("a.b")
+        @test !parse_azure_url(account="a.b")[1]
+        @test_throws ArgumentError CloudStore.validate_account_name("a-b")
+        @test_throws ArgumentError parse_azure_url(account="a-b")
+        @test_throws ArgumentError CloudStore.validate_account_name("a/b")
+        @test_throws ArgumentError parse_azure_url(account="a/b")
+
+        @test CloudStore.validate_account_name("abcd123456") == "abcd123456"
+        @test CloudStore.validate_account_name("1a1") == "1a1"
     end
 end
 
