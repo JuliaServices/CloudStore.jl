@@ -95,7 +95,7 @@ function _validate_aws(ok::Bool, accelerate, host, bucket, region, key)
     return (
         ok,
         accelerate,
-        isnothing(host) ? nothing : replace(String(host), "s3" => "https"; count=1),
+        isnothing(host) ? nothing : replace(String(host), "s3" => "http"; count=1),
         String(validate_bucket_name(bucket, accelerate)),
         isnothing(region) || isempty(region) ? "" : String(validate_region(region)),
         isnothing(key) ? "" : String(validate_key(key)),
