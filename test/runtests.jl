@@ -79,8 +79,8 @@ check(x, y) = begin; reset!(x); reset!(y); z = read(x) == read(y); reset!(x); re
 
                 # passing urls directly
                 url = "$(bucket.baseurl)test5.csv"
-                obj = S3.put(url, body; credentials)
-                data = S3.get(url, out; credentials)
+                obj = S3.put(url, body; parseLocal=true, credentials)
+                data = S3.get(url, out; parseLocal=true, credentials)
                 @test check(body, data)
                 resetOut!(out)
                 cleanup!(body)
@@ -165,8 +165,8 @@ end
 
                 # passing urls directly
                 url = "$(container.baseurl)test5.csv"
-                obj = Blobs.put(url, body; credentials)
-                data = Blobs.get(url, out; credentials)
+                obj = Blobs.put(url, body; parseLocal=true, credentials)
+                data = Blobs.get(url, out; parseLocal=true, credentials)
                 @test check(body, data)
                 resetOut!(out)
                 cleanup!(body)

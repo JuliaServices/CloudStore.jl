@@ -60,8 +60,8 @@ delete(x::Container, key::String; kw...) = Azure.delete(API.makeURL(x, key); kw.
 delete(x::Object; kw...) = delete(x.store, x.key; credentials=x.credentials, kw...)
 
 for func in (:list, :get, :head, :put, :delete)
-    @eval function $func(url::AbstractString, args...; kw...)
-        ok, host, account, container, blob = parseAzureAccountContainerBlob(url; parseLocal=true)
+    @eval function $func(url::AbstractString, args...; parseLocal::Bool=false, kw...)
+        ok, host, account, container, blob = parseAzureAccountContainerBlob(url; parseLocal=parseLocal)
         ok || throw(ArgumentError("invalid url for Blobs.$($func): `$url`"))
         if blob !== nothing
             return $func(Azure.Container(container, account; host), blob, args...; kw...)

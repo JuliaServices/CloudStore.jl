@@ -61,8 +61,8 @@ delete(x::Bucket, key; kw...) = AWS.delete(API.makeURL(x, key); service="s3", kw
 delete(x::Object; kw...) = delete(x.store, x.key; credentials=x.credentials, kw...)
 
 for func in (:list, :get, :head, :put, :delete)
-    @eval function $func(url::AbstractString, args...; region=nothing, nowarn::Bool=false, kw...)
-        ok, accelerate, host, bucket, reg, key = parseAWSBucketRegionKey(url; parseLocal=true)
+    @eval function $func(url::AbstractString, args...; region=nothing, nowarn::Bool=false, parseLocal::Bool=false, kw...)
+        ok, accelerate, host, bucket, reg, key = parseAWSBucketRegionKey(url; parseLocal=parseLocal)
         ok || throw(ArgumentError("invalid url for S3.$($func): `$url`"))
         if region === nothing
             nowarn || @warn "`region` keyword argument not provided to `S3.$($func)` and undetected from url.  Defaulting to `us-east-1`"
