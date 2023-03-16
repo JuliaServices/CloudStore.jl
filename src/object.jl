@@ -271,7 +271,7 @@ mutable struct PrefetchedDownloadStream{T <: Object} <: IO
         return PrefetchedDownloadStream(object, prefetch_size; prefetch_multipart_size, kw...)
     end
 end
-Base.eof(io::PrefetchedDownloadStream) = io.pos >= io.len
+Base.eof(io::PrefetchedDownloadStream) = io.pos > io.len
 bytesremaining(io::PrefetchedDownloadStream) = io.len - io.pos + 1
 function Base.bytesavailable(io::PrefetchedDownloadStream)
     return isnothing(io.buf) ? 0 : bytesavailable(io.buf::PrefetchBuffer)

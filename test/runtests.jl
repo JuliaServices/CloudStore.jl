@@ -673,4 +673,25 @@ end
     end
 end
 
+@testset "CloudStore.PrefetchedDownloadStream read last byte" begin
+    Minio.with(; debug=true) do conf
+        credentials, bucket = conf
+        multicsv = "1,2,3,4,5,6,7,8,9,1\n"^1000000; # 20 MB
+        S3.put(bucket, "test.csv", codeunits(multicsv); credentials)
+        obj = CloudStore.Object(bucket, "test.csv"; credentials)
+        @test length(obj) == sizeof(multicsv)
+
+        N = length(multicsv) - 1
+        buf = Vector{UInt8}(undef, N)
+        copyto!(buf, 1, obj, 1, N)
+        @assert buf == view(codeunits(multicsv), 1:N)
+
+        ioobj = CloudStore.PrefetchedDownloadStream(bucket, "test.csv", 16*1024; credentials)
+        readbytes!(ioobj, buf, N)
+        @test buf == view(codeunits(multicsv), 1:N)
+        @test read(ioobj, UInt8) == UInt8(last(multicsv))
+    end
+end
+
+
 end # @testset "CloudStore.jl"
