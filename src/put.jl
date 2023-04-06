@@ -3,7 +3,7 @@ nbytes(x::String) = filesize(x)
 nbytes(x::IOBuffer) = x.size - x.ptr + 1
 nbytes(x::IO) = eof(x) ? 0 : bytesavailable(x)
 
-function prepBody(x::RequestBodyType, compress::Bool)
+function prepBody(x::RequestBodyType, compress::Bool, zlibng::Bool)
     if x isa String || x isa IOStream
         body = Mmap.mmap(x)
     elseif x isa IOBuffer
@@ -17,10 +17,10 @@ function prepBody(x::RequestBodyType, compress::Bool)
     else
         body = x
     end
-    return compress ? transcode(GzipCompressor, body) : body
+    return compress ? transcode(compressor(zlibng), body) : body
 end
 
-function prepBodyMultipart(x::RequestBodyType, compress::Bool)
+function prepBodyMultipart(x::RequestBodyType, compress::Bool, zlibng::Bool)
     if x isa String
         body = open(x, "r") # need to close later!
     elseif x isa AbstractVector{UInt8}
@@ -29,7 +29,7 @@ function prepBodyMultipart(x::RequestBodyType, compress::Bool)
         @assert x isa IO
         body = x
     end
-    return compress ? GzipCompressorStream(body) : body
+    return compress ? compressorstream(zlibng)(body) : body
 end
 
 _read(body, n) = read(body, n)
@@ -43,16 +43,20 @@ function _read(body::IOBuffer, n)
     return res
 end
 
+compressorstream(zlibng) = zlibng ? CodecZlibNG.GzipCompressorStream : CodecZlib.GzipCompressorStream
+compressor(zlibng) = zlibng ? CodecZlibNG.GzipCompressor : CodecZlib.GzipCompressor
+
 function putObjectImpl(x::AbstractStore, key::String, in::RequestBodyType;
     multipartThreshold::Int=MULTIPART_THRESHOLD,
     partSize::Int=MULTIPART_SIZE,
     batchSize::Int=defaultBatchSize(),
     allowMultipart::Bool=true,
+    zlibng::Bool=false,
     compress::Bool=false, credentials=nothing, kw...)
 
     N = nbytes(in)
     if N <= multipartThreshold || !allowMultipart
-        body = prepBody(in, compress)
+        body = prepBody(in, compress, zlibng)
         resp = putObject(x, key, body; credentials, kw...)
         return Object(x, credentials, key, N, etag(HTTP.header(resp, "ETag")))
     end
@@ -61,7 +65,7 @@ function putObjectImpl(x::AbstractStore, key::String, in::RequestBodyType;
     url = makeURL(x, key)
     eTags = String[]
     sync = OrderedSynchronizer(1)
-    body = prepBodyMultipart(in, compress)
+    body = prepBodyMultipart(in, compress, zlibng)
     nTasks = cld(N, partSize)
     nLoops = cld(nTasks, batchSize)
     # while nLoops * batchSize is the *max* # of iterations we'll do
@@ -86,7 +90,7 @@ function putObjectImpl(x::AbstractStore, key::String, in::RequestBodyType;
         eof(body) && break
     end
     # cleanup body
-    if body isa GzipDecompressorStream
+    if body isa compressorstream(zlibng)
         body = body.stream
     end
     if in isa String

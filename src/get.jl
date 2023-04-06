@@ -42,28 +42,43 @@ function parseContentRange(str)
     return (parse(Int, m[1]), parse(Int, m[2]), parse(Int, m[3]))
 end
 
+function check_redirect(key, resp)
+    if HTTP.isredirect(resp)
+        try
+            throw(HTTP.StatusError(resp.status, resp.request.method, resp.request.target, resp))
+        catch
+            # The ArgumentError will be caused by the HTTP error to provide more context
+            throw(ArgumentError("Invalid object key: $key"))
+        end
+    end
+end
+
+decompressorstream(zlibng) = zlibng ? CodecZlibNG.GzipDecompressorStream : CodecZlib.GzipDecompressorStream
+decompressor(zlibng) = zlibng ? CodecZlibNG.GzipDecompressor : CodecZlib.GzipDecompressor
+
 function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType=nothing;
     multipartThreshold::Int=MULTIPART_THRESHOLD,
     partSize::Int=MULTIPART_SIZE,
     batchSize::Int=defaultBatchSize(),
     allowMultipart::Bool=true,
     decompress::Bool=false,
+    zlibng::Bool=false,
     headers=HTTP.Headers(), kw...)
 
+    # keyword arg handling
+    if (out isa AbstractVector{UInt8} && length(out) <= multipartThreshold)
+        allowMultipart = false
+        res = out
+    end
+    start_time = time()
     url = makeURL(x, key)
     if allowMultipart
         # make a head request to see if the object happens to be empty
         # if so, it isn't valid to make a Range bytes request, so we'll short-circuit
         resp = API.headObject(x, url, headers; kw...)
-        # The ArgumentError will be caused by the HTTP error to provide more context
-        if HTTP.isredirect(resp)
-            try
-                throw(HTTP.StatusError(resp.status, resp.request.method, resp.request.target, resp))
-            catch
-                throw(ArgumentError("Invalid object key: $key"))
-            end
-        end
-        if HTTP.header(resp, "Content-Length") == "0"
+        check_redirect(key, resp)
+        contentLength = parse(Int, HTTP.header(resp, "Content-Length", "0"))
+        if contentLength == 0
             if out === nothing
                 return resp.body
             elseif out isa String
@@ -72,50 +87,66 @@ function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType=noth
             else
                 return out
             end
+        elseif out === nothing
+            # allocate the full, final buffer upfront since we know the length
+            res = Vector{UInt8}(undef, contentLength)
+        elseif out isa AbstractVector{UInt8}
+            length(out) < contentLength && throw(ArgumentError("out ($(length(out))) must at least be of length $contentLength"))
+            if length(out) > contentLength
+                res = view(out, 1:contentLength)
+            else
+                res = out
+            end
         end
-        HTTP.setheader(headers, contentRange(0:(multipartThreshold - 1)))
+        HTTP.setheader(headers, contentRange(0:min(multipartThreshold - 1, contentLength - 1)))
     end
-    if out === nothing
-        resp = getObject(x, url, headers; connection_limit=batchSize, kw...)
-        res = resp.body
+    if out === nothing && allowMultipart || out isa AbstractVector{UInt8}
+        _res = view(res, 1:min(multipartThreshold, length(res)))
+        resp = getObject(x, url, headers; response_stream=_res, kw...)
+    elseif out === nothing
+        resp = getObject(x, url, headers; kw...)
     elseif out isa String
         res = open(out, "w")
         if decompress
-            res = GzipDecompressorStream(res)
+            res = decompressorstream(zlibng)(res)
         end
-        resp = getObject(x, url, headers; response_stream=res, connection_limit=batchSize, kw...)
+        resp = getObject(x, url, headers; response_stream=res, kw...)
     else
-        res = decompress ? GzipDecompressorStream(out) : out
-        resp = getObject(x, url, headers; response_stream=res, connection_limit=batchSize, kw...)
+        res = decompress ? decompressorstream(zlibng)(out) : out
+        resp = getObject(x, url, headers; response_stream=res, kw...)
     end
+    check_redirect(key, resp)
+    nbytes = Threads.Atomic{Int}(get(resp.request.context, :nbytes, 0))
     if allowMultipart
-        soff, eoff, total = parseContentRange(HTTP.header(resp, "Content-Range"))
+        partSize > 0 || throw(ArgumentError("partSize must be > 0"))
+        batchSize > 0 || throw(ArgumentError("batchSize must be > 0"))
+        _, eoff, total = parseContentRange(HTTP.header(resp, "Content-Range"))
         if (eoff + 1) < total
             nTasks = cld((total - 1) - eoff, partSize)
             nLoops = cld(nTasks, batchSize)
             sync = OrderedSynchronizer(1)
-            if res isa AbstractVector{UInt8}
-                resize!(res, total)
-            end
             for j = 1:nLoops
                 @sync for i = 1:batchSize
                     n = (j - 1) * batchSize + i
                     n > nTasks && break
-                    let n=n, headers=copy(headers)
-                        Threads.@spawn begin
-                            rng = contentRange(((n - 1) * partSize + eoff + 1):min(total - 1, (n * partSize) + eoff))
-                            HTTP.setheader(headers, rng)
-                            #TODO: in HTTP.jl, allow passing res as response_stream that we write to directly
-                            r = getObject(x, url, headers; connection_limit=batchSize, kw...)
-                            if res isa AbstractVector{UInt8}
-                                off, off2, _ = parseContentRange(HTTP.header(r, "Content-Range"))
-                                put!(sync, n) do
-                                    copyto!(res, off + 1, r.body, 1, off2 - off + 1)
-                                end
-                            else
-                                put!(sync, n) do
-                                    write(res, r.body)
-                                end
+                    Threads.@spawn begin
+                        _n = $n
+                        _headers = copy(headers)
+                        rng = ((_n - 1) * partSize + eoff + 1):min(total - 1, (_n * partSize) + eoff)
+                        HTTP.setheader(_headers, contentRange(rng))
+                        if out === nothing || out isa AbstractVector{UInt8}
+                            # the Content-Range header is 0-indexed, but the view is 1-indexed
+                            _rng = (first(rng) + 1):(last(rng) + 1)
+                            # we pass just this task's slice of the overall buffer to be filled in
+                            # directly as HTTP receives the response body
+                            _res = view(res, _rng)
+                            r = getObject(x, url, _headers; response_stream=_res, kw...)
+                            Threads.atomic_add!(nbytes, get(r.request.context, :nbytes, 0))
+                        else
+                            r = getObject(x, url, _headers; kw...)
+                            Threads.atomic_add!(nbytes, get(r.request.context, :nbytes, 0))
+                            put!(sync, n) do
+                                write(res, r.body)
                             end
                         end
                     end
@@ -126,11 +157,19 @@ function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType=noth
     if out isa String
         close(res)
         res = out
-    elseif out === nothing && decompress
-        res = transcode(GzipDecompressor, res)
-    elseif decompress && res isa GzipDecompressorStream
+    elseif out isa AbstractVector{UInt8} && decompress && res isa SubArray
+        # the user passed a pre-allocated buffer and wants to decompress
+        transcode(decompressor(zlibng), copy(res), out)
+        res = out
+    elseif (out === nothing || out isa AbstractVector{UInt8}) && decompress
+        res = transcode(decompressor(zlibng), res)
+    elseif decompress && res isa decompressorstream(zlibng)
         flush(res)
         res = out
     end
+    end_time = time()
+    bytes = nbytes[]
+    gbits_per_second = bytes == 0 ? 0 : (((8 * bytes) / 1e9) / (end_time - start_time))
+    @debug "CloudStore.get complete with bandwidth: $(gbits_per_second) Gbps"
     return res
 end
