@@ -8,7 +8,7 @@ module API
 
 export Object, PrefetchedDownloadStream, ResponseBodyType, RequestBodyType
 
-using HTTP, CodecZlib, Mmap
+using HTTP, CodecZlib, CodecZlibNG, Mmap
 import WorkerUtilities: OrderedSynchronizer
 import CloudBase: AbstractStore
 
@@ -21,7 +21,7 @@ const MULTIPART_SIZE = 2^23
 
 defaultBatchSize() = 4 * Threads.nthreads()
 
-const ResponseBodyType = Union{Nothing, String, IO}
+const ResponseBodyType = Union{Nothing, AbstractVector{UInt8}, String, IO}
 const RequestBodyType = Union{AbstractVector{UInt8}, String, IO}
 
 asArray(x::Array) = x
