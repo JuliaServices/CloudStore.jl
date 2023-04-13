@@ -63,7 +63,8 @@ function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType=noth
     allowMultipart::Bool=true,
     decompress::Bool=false,
     zlibng::Bool=false,
-    headers=HTTP.Headers(), kw...)
+    headers=HTTP.Headers(),
+    lograte::Bool=false, kw...)
 
     # keyword arg handling
     if (out isa AbstractVector{UInt8} && length(out) <= multipartThreshold)
@@ -170,6 +171,6 @@ function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType=noth
     end_time = time()
     bytes = nbytes[]
     gbits_per_second = bytes == 0 ? 0 : (((8 * bytes) / 1e9) / (end_time - start_time))
-    @debug "CloudStore.get complete with bandwidth: $(gbits_per_second) Gbps"
+    lograte && @info "CloudStore.get complete with bandwidth: $(gbits_per_second) Gbps"
     return res
 end

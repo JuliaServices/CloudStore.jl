@@ -52,13 +52,18 @@ function putObjectImpl(x::AbstractStore, key::String, in::RequestBodyType;
     batchSize::Int=defaultBatchSize(),
     allowMultipart::Bool=true,
     zlibng::Bool=false,
-    compress::Bool=false, credentials=nothing, kw...)
+    compress::Bool=false, credentials=nothing,
+    lograte::Bool=false, kw...)
 
+    start_time = time()
     N = nbytes(in)
+    wbytes = Threads.Atomic{Int}(0)
     if N <= multipartThreshold || !allowMultipart
         body = prepBody(in, compress, zlibng)
         resp = putObject(x, key, body; credentials, kw...)
-        return Object(x, credentials, key, N, etag(HTTP.header(resp, "ETag")))
+        wbytes[] = get(resp.request.context, :nbytes_written, 0)
+        obj = Object(x, credentials, key, N, etag(HTTP.header(resp, "ETag")))
+        @goto done
     end
     # multipart upload
     uploadState = startMultipartUpload(x, key; credentials, kw...)
@@ -76,15 +81,13 @@ function putObjectImpl(x::AbstractStore, key::String, in::RequestBodyType;
             eof(body) && break
             n = (j - 1) * batchSize + i
             part = _read(body, partSize)
-            let n=n, part=part
-                Threads.@spawn begin
-                    eTag = uploadPart(x, url, part, n, uploadState; credentials, kw...)
-                    let eTag=eTag
-                        # we synchronize the eTags here because the order matters
-                        # for the final call to completeMultipartUpload
-                        put!(() -> push!(eTags, eTag), sync, n)
-                    end
-                end
+            Threads.@spawn begin
+                _n = $n
+                parteTag, wb = uploadPart(x, url, $part, _n, uploadState; credentials, kw...)
+                Threads.atomic_add!(wbytes, wb)
+                # we synchronize the eTags here because the order matters
+                # for the final call to completeMultipartUpload
+                put!(() -> push!(eTags, parteTag), sync, _n)
             end
         end
         eof(body) && break
@@ -97,5 +100,11 @@ function putObjectImpl(x::AbstractStore, key::String, in::RequestBodyType;
         close(body)
     end
     eTag = completeMultipartUpload(x, url, eTags, uploadState; credentials, kw...)
-    return Object(x, credentials, key, N, eTag)
+    obj = Object(x, credentials, key, N, eTag)
+@label done
+    end_time = time()
+    bytes = wbytes[]
+    gbits_per_second = bytes == 0 ? 0 : (((8 * bytes) / 1e9) / (end_time - start_time))
+    lograte && @info "CloudStore.put complete with bandwidth: $(gbits_per_second) Gbps"
+    return obj
 end
