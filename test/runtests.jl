@@ -56,7 +56,7 @@ check(x, y) = begin; reset!(x); reset!(y); z = read(x) == read(y); reset!(x); re
                 out = outType(csv, outBody)
                 println("in: $inBody, out: $outBody, single part, no compression")
                 obj = S3.put(bucket, "test.csv", body; credentials)
-                data = S3.get(bucket, "test.csv", out; credentials)
+                data = S3.get(bucket, "test.csv", out; objectMaxSize=sizeof(csv), credentials)
                 @test check(body, data)
                 resetOut!(out)
                 # get on Object
@@ -105,7 +105,7 @@ check(x, y) = begin; reset!(x); reset!(y); z = read(x) == read(y); reset!(x); re
                 out = outType(multicsv, outBody)
                 println("in: $inBody, out: $outBody, multipart, no compression")
                 obj = S3.put(bucket, "test3.csv", mbody; multipartThreshold=5_000_000, partSize=5_500_000, lograte=true, credentials)
-                data = S3.get(bucket, "test3.csv", out; lograte=true, credentials)
+                data = S3.get(bucket, "test3.csv", out; objectMaxSize=sizeof(multicsv), lograte=true, credentials)
                 @test check(mbody, data)
                 resetOut!(out)
                 println("in: $inBody, out: $outBody, multipart, compression")

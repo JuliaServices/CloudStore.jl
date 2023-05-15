@@ -135,12 +135,12 @@ function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType=noth
                 body = open(out, "w")
                 resp = getObject(x, url, headers; response_stream=body, kw...)
             end
-            resp = getObject(x, url, headers; response_stream=res, kw...)
         else
             if decompress
                 body = decompressorstream(zlibng)(out)
                 resp = getObject(x, url, headers; response_stream=body, kw...)
             else
+                body = out
                 resp = getObject(x, url, headers; response_stream=out, kw...)
             end
         end
