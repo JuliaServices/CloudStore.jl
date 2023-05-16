@@ -56,7 +56,7 @@ check(x, y) = begin; reset!(x); reset!(y); z = read(x) == read(y); reset!(x); re
                 out = outType(csv, outBody)
                 println("in: $inBody, out: $outBody, single part, no compression")
                 obj = S3.put(bucket, "test.csv", body; credentials)
-                data = S3.get(bucket, "test.csv", out; credentials)
+                data = S3.get(bucket, "test.csv", out; objectMaxSize=sizeof(csv), credentials)
                 @test check(body, data)
                 resetOut!(out)
                 # get on Object
@@ -73,18 +73,16 @@ check(x, y) = begin; reset!(x); reset!(y); z = read(x) == read(y); reset!(x); re
                 @test objs[1].key == "test.csv"
 
                 println("in: $inBody, out: $outBody, single part, compression")
+                obj = S3.put(bucket, "test2.csv", body; compress=true, credentials)
                 if outBody == Vector{UInt8}
-                    @warn "Skipping compression test for Vector{UInt8} output"
-                    obj = S3.put(bucket, "test2.csv", body; credentials)
-                    data = S3.get(bucket, "test2.csv", out; credentials)
-                    @test check(body, data)
-                    resetOut!(out)
+                    # throws an error because compressed data is larger than original data
+                    @test_throws ArgumentError S3.get(bucket, "test2.csv", out; decompress=true, credentials)
+                    data = S3.get(bucket, "test2.csv", zeros(UInt8, 100); decompress=true, credentials)
                 else
-                    obj = S3.put(bucket, "test2.csv", body; compress=true, credentials)
                     data = S3.get(bucket, "test2.csv", out; decompress=true, credentials)
-                    @test check(body, data)
-                    resetOut!(out)
                 end
+                @test check(body, data)
+                resetOut!(out)
 
                 # passing urls directly
                 url = "$(bucket.baseurl)test5.csv"
@@ -106,8 +104,8 @@ check(x, y) = begin; reset!(x); reset!(y); z = read(x) == read(y); reset!(x); re
                 mbody = inBody(multicsv);
                 out = outType(multicsv, outBody)
                 println("in: $inBody, out: $outBody, multipart, no compression")
-                obj = S3.put(bucket, "test3.csv", mbody; multipartThreshold=5_000_000, partSize=5_500_000, credentials)
-                data = S3.get(bucket, "test3.csv", out; credentials)
+                obj = S3.put(bucket, "test3.csv", mbody; multipartThreshold=5_000_000, partSize=5_500_000, lograte=true, credentials)
+                data = S3.get(bucket, "test3.csv", out; objectMaxSize=sizeof(multicsv), lograte=true, credentials)
                 @test check(mbody, data)
                 resetOut!(out)
                 println("in: $inBody, out: $outBody, multipart, compression")

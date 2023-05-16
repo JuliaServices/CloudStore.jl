@@ -164,7 +164,7 @@ size of any individual GET request in bytes (default $(Base.format_bytes(DEFAULT
 `prefetch_size` is the size of a buffer that stores the fetched bytes and which is iterated
 when we consume/read the IO (default $(Base.format_bytes(DEFAULT_PREFETCH_SIZE))).
 
-The numbef of spawned tasks is also governed by these two parameters, with approximately
+The number of spawned tasks is also governed by these two parameters, with approximately
 `prefetch_size` / `prefetch_multipart_size` tasks spawned for performing the GET requests
 (defaults to 4 if those fields aren't specified) + 1 task is spawned to coordinate the
 prefetching process. Number of spawned tasks is upper-bounded by the size of the input and

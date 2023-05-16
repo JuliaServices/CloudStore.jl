@@ -56,117 +56,179 @@ end
 decompressorstream(zlibng) = zlibng ? CodecZlibNG.GzipDecompressorStream : CodecZlib.GzipDecompressorStream
 decompressor(zlibng) = zlibng ? CodecZlibNG.GzipDecompressor : CodecZlib.GzipDecompressor
 
+struct BufferBatch
+    lock::ReentrantLock
+    buffers::Vector{Vector{UInt8}}
+    partSize::Int
+end
+
+BufferBatch(n, partSize) = BufferBatch(ReentrantLock(), Vector{Vector{UInt8}}(undef, n), partSize)
+function Base.getindex(b::BufferBatch, i::Int)
+    Base.@lock b.lock begin
+        if isassigned(b.buffers, i)
+            return b.buffers[i]
+        else
+            return b.buffers[i] = Vector{UInt8}(undef, b.partSize)
+        end
+    end
+end
+
 function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType=nothing;
     multipartThreshold::Int=MULTIPART_THRESHOLD,
     partSize::Int=MULTIPART_SIZE,
     batchSize::Int=defaultBatchSize(),
     allowMultipart::Bool=true,
+    objectMaxSize::Union{Int, Nothing}=out isa AbstractVector{UInt8} ? length(out) : nothing,
     decompress::Bool=false,
     zlibng::Bool=false,
     headers=HTTP.Headers(),
     lograte::Bool=false, kw...)
 
-    # keyword arg handling
-    if (out isa AbstractVector{UInt8} && length(out) <= multipartThreshold)
+    # if user provided a buffer or signalled the max object size is < multipartThreshold
+    # then we'll avoid doing an exploratory HEAD request to get total size
+    # and take the user's word that the total object size is <= objectMaxSize | length(out)
+    if objectMaxSize !== nothing && objectMaxSize < multipartThreshold
         allowMultipart = false
-        res = out
     end
-    start_time = time()
-    url = makeURL(x, key)
-    if allowMultipart
-        # make a head request to see if the object happens to be empty
-        # if so, it isn't valid to make a Range bytes request, so we'll short-circuit
-        resp = API.headObject(x, url, headers; kw...)
-        check_redirect(key, resp)
-        contentLength = parse(Int, HTTP.header(resp, "Content-Length", "0"))
-        if contentLength == 0
-            if out === nothing
-                return resp.body
-            elseif out isa String
-                open(io -> nothing, out, "w")
-                return out
-            else
-                return out
-            end
-        elseif out === nothing
-            # allocate the full, final buffer upfront since we know the length
-            res = Vector{UInt8}(undef, contentLength)
-        elseif out isa AbstractVector{UInt8}
-            length(out) < contentLength && throw(ArgumentError("out ($(length(out))) must at least be of length $contentLength"))
-            if length(out) > contentLength
-                res = view(out, 1:contentLength)
-            else
-                res = out
-            end
-        end
-        HTTP.setheader(headers, contentRange(0:min(multipartThreshold - 1, contentLength - 1)))
-    end
-    if out === nothing && allowMultipart || out isa AbstractVector{UInt8}
-        _res = view(res, 1:min(multipartThreshold, length(res)))
-        resp = getObject(x, url, headers; response_stream=_res, kw...)
-    elseif out === nothing
-        resp = getObject(x, url, headers; kw...)
-    elseif out isa String
-        res = open(out, "w")
-        if decompress
-            res = decompressorstream(zlibng)(res)
-        end
-        resp = getObject(x, url, headers; response_stream=res, kw...)
-    else
-        res = decompress ? decompressorstream(zlibng)(out) : out
-        resp = getObject(x, url, headers; response_stream=res, kw...)
-    end
-    check_redirect(key, resp)
-    nbytes = Threads.Atomic{Int}(get(resp.request.context, :nbytes, 0))
     if allowMultipart
         partSize > 0 || throw(ArgumentError("partSize must be > 0"))
         batchSize > 0 || throw(ArgumentError("batchSize must be > 0"))
-        _, eoff, total = parseContentRange(HTTP.header(resp, "Content-Range"))
-        if (eoff + 1) < total
-            nTasks = cld((total - 1) - eoff, partSize)
-            nLoops = cld(nTasks, batchSize)
-            sync = OrderedSynchronizer(1)
-            for j = 1:nLoops
-                @sync for i = 1:batchSize
-                    n = (j - 1) * batchSize + i
-                    n > nTasks && break
-                    Threads.@spawn begin
-                        _n = $n
-                        _headers = copy(headers)
-                        rng = ((_n - 1) * partSize + eoff + 1):min(total - 1, (_n * partSize) + eoff)
-                        HTTP.setheader(_headers, contentRange(rng))
-                        if out === nothing || out isa AbstractVector{UInt8}
-                            # the Content-Range header is 0-indexed, but the view is 1-indexed
-                            _rng = (first(rng) + 1):(last(rng) + 1)
-                            # we pass just this task's slice of the overall buffer to be filled in
-                            # directly as HTTP receives the response body
-                            _res = view(res, _rng)
-                            r = getObject(x, url, _headers; response_stream=_res, kw...)
-                            Threads.atomic_add!(nbytes, get(r.request.context, :nbytes, 0))
-                        else
-                            r = getObject(x, url, _headers; kw...)
-                            Threads.atomic_add!(nbytes, get(r.request.context, :nbytes, 0))
-                            put!(sync, n) do
-                                write(res, r.body)
-                            end
-                        end
-                    end
+    end
+    start_time = time()
+    url = makeURL(x, key)
+    # setup return type
+    # out types: nothing, AbstractVector{UInt8}, String, IO
+    # rules:
+    #   - if out is nothing, then we'll allocate a single Vector{UInt8}; if decompress, that's 1 extra allocation to decompress
+    #   - if out is a Vector{UInt8}, then we'll use that as the response_stream, and resize! it down if needed
+    #     - if decompress, we'll initially use out to write to, then make a copy of the written bytes and decompress back into out
+    #     - provided buffer *MUST BE* large enough to hold entire object, whether compressed or uncompressed, gotchas include:
+    #   - if out is a String, then we'll open a file and use that as the response_stream
+    #   - if out is an IO, then we'll use that as the response_stream directly
+    #   - BUT, if multipart, then we use a batchSize partSize-length Vector{UInt8}s as scratch space to download in parallel
+    #     and then write to out as each part is downloaded
+    if !(out === nothing || out isa AbstractVector{UInt8})
+        res = out
+    end
+    # for tracking bitrate per second of overall download
+    nbytes = Threads.Atomic{Int}(0)
+
+    # if the user doesn't want multipart or we know from objectMaxSize or length(out) that we're
+    # < multipartThreshold, then we'll just do a single GET request, handle that case first since
+    # it's much simpler and then later we'll do all the multipart stitching logic
+    local body
+    if !allowMultipart
+        if out === nothing
+            resp = getObject(x, url, headers; kw...)
+            res = resp.body
+        elseif out isa AbstractVector{UInt8}
+            resp = try
+                getObject(x, url, headers; response_stream=out, kw...)
+            catch
+                throw(ArgumentError("provided output buffer (length = $(length(out))) is too small for actual cloud object size"))
+            end
+        elseif out isa String
+            if decompress
+                body = decompressorstream(zlibng)(open(out, "w"))
+                resp = getObject(x, url, headers; response_stream=body, kw...)
+            else
+                body = open(out, "w")
+                resp = getObject(x, url, headers; response_stream=body, kw...)
+            end
+        else
+            if decompress
+                body = decompressorstream(zlibng)(out)
+                resp = getObject(x, url, headers; response_stream=body, kw...)
+            else
+                body = out
+                resp = getObject(x, url, headers; response_stream=out, kw...)
+            end
+        end
+        check_redirect(key, resp)
+        nbytes[] = parse(Int, HTTP.header(resp, "Content-Length", "0"))
+        @goto done
+    end
+
+    # multipart downloads
+
+    # make a head request to see if the object happens to be empty
+    # if so, it isn't valid to make a Range bytes request, so we'll short-circuit
+    # the head request also lets us know how big the object it
+    resp = API.headObject(x, url, headers; kw...)
+    check_redirect(key, resp)
+    contentLength = parse(Int, HTTP.header(resp, "Content-Length", "0"))
+    if contentLength == 0
+        # if the object is zero-length, return an "empty" version of the output type
+        if out === nothing || out isa AbstractVector{UInt8}
+            res = resp.body
+        elseif out isa String
+            body = open(out, "w")
+        else
+            body = out
+        end
+        @goto done
+    elseif out === nothing
+        # allocate the full, final buffer upfront since we know the length
+        res = body = Vector{UInt8}(undef, contentLength)
+    elseif out isa AbstractVector{UInt8}
+        # user-provided buffer is allowed to be larger than actual object size, but not smaller
+        length(out) < contentLength && throw(ArgumentError("out ($(length(out))) must at least be of length $contentLength"))
+        res = out
+        body = view(out, 1:contentLength)
+    elseif out isa String
+        body = decompress ? decompressorstream(zlibng)(open(out, "w")) : open(out, "w")
+        buffers = BufferBatch(batchSize, partSize)
+    else
+        body = decompress ? decompressorstream(zlibng)(out) : out
+        buffers = BufferBatch(batchSize, partSize)
+    end
+
+    nTasks = max(1, cld(contentLength - 1, partSize))
+    nLoops = cld(nTasks, batchSize)
+    sync = OrderedSynchronizer(1)
+    for j = 1:nLoops
+        @sync for i = 1:batchSize
+            n = (j - 1) * batchSize + i
+            n > nTasks && break
+            Threads.@spawn begin
+                _n = $n
+                _headers = copy(headers)
+                rng = ((_n - 1) * partSize):min(contentLength - 1, _n * partSize - 1)
+                HTTP.setheader(_headers, contentRange(rng))
+                if out === nothing || out isa AbstractVector{UInt8}
+                    # the Content-Range header is 0-indexed, but the view is 1-indexed
+                    _rng = (first(rng) + 1):(last(rng) + 1)
+                    # we pass just this task's slice of the overall buffer to be filled in
+                    # directly as HTTP receives the response body
+                    _res = view(res, _rng)
+                    r = getObject(x, url, _headers; response_stream=_res, kw...)
+                    Threads.atomic_add!(nbytes, get(r.request.context, :nbytes, 0))
+                else
+                    buf = view(buffers[$i], 1:min(partSize, length(rng)))
+                    r = getObject(x, url, _headers; response_stream=buf, kw...)
+                    Threads.atomic_add!(nbytes, get(r.request.context, :nbytes, 0))
+                    put!(() -> write(body, buf), sync, _n)
                 end
             end
         end
     end
-    if out isa String
-        close(res)
-        res = out
-    elseif out isa AbstractVector{UInt8} && decompress && res isa SubArray
-        # the user passed a pre-allocated buffer and wants to decompress
-        transcode(decompressor(zlibng), copy(res), out)
-        res = out
-    elseif (out === nothing || out isa AbstractVector{UInt8}) && decompress
-        res = transcode(decompressor(zlibng), res)
-    elseif decompress && res isa decompressorstream(zlibng)
-        flush(res)
-        res = out
+
+@label done
+    if out === nothing
+        if decompress
+            res = transcode(decompressor(zlibng), res)
+        end
+    elseif out isa AbstractVector{UInt8}
+        if decompress
+            # make a copy of a view of just the compressed bytes in out, then decompress into out
+            res = transcode(decompressor(zlibng), copy(view(out, 1:nbytes[])), out)
+        else
+            res = resize!(out, nbytes[])
+        end
+    elseif out isa String
+        close(body)
+    else
+        flush(body)
     end
     end_time = time()
     bytes = nbytes[]
