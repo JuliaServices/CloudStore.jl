@@ -231,7 +231,6 @@ end
 end
 
 @testset "URL Parsing Unit Tests" begin
-
     azure = [
         ("https://myaccount.blob.core.windows.net/mycontainer/myblob", (true, nothing, "myaccount", "mycontainer", "myblob")),
         ("https://myaccount.blob.core.windows.net/mycontainer", (true, nothing, "myaccount", "mycontainer", "")),
@@ -241,7 +240,17 @@ end
         ("https://127.0.0.1:45942/myaccount/mycontainer/myblob", (true, "https://127.0.0.1:45942", "myaccount", "mycontainer", "myblob")),
         ("azure://127.0.0.1:45942/myaccount/mycontainer", (true, "https://127.0.0.1:45942", "myaccount", "mycontainer", "")),
         ("azure://127.0.0.1:45942/myaccount/mycontainer/myblob", (true, "https://127.0.0.1:45942", "myaccount", "mycontainer", "myblob")),
-        ("azure://myaccount", (true, nothing, "myaccount", "", ""))
+        ("azure://myaccount", (true, nothing, "myaccount", "", "")),
+
+        ("HTTPS://myaccount.BLOB.core.windows.net/mycontainer/myblob", (true, nothing, "myaccount", "mycontainer", "myblob")),
+        ("httpS://myaccount.blob.CORE.windows.net/mycontainer", (true, nothing, "myaccount", "mycontainer", "")),
+        ("AZURE://myaccount.blob.core.WINDOWS.net/mycontainer/myblob", (true, nothing, "myaccount", "mycontainer", "myblob")),
+        ("azurE://myaccount.blob.core.windows.NET/mycontainer", (true, nothing, "myaccount", "mycontainer", "")),
+        ("Https://127.0.0.1:45942/myaccount/mycontainer", (true, "Https://127.0.0.1:45942", "myaccount", "mycontainer", "")),
+        ("hTTPs://127.0.0.1:45942/myaccount/mycontainer/myblob", (true, "hTTPs://127.0.0.1:45942", "myaccount", "mycontainer", "myblob")),
+        ("Azure://127.0.0.1:45942/myaccount/mycontainer", (true, "https://127.0.0.1:45942", "myaccount", "mycontainer", "")),
+        ("aZURe://127.0.0.1:45942/myaccount/mycontainer/myblob", (true, "https://127.0.0.1:45942", "myaccount", "mycontainer", "myblob")),
+        ("Azure://myaccount", (true, nothing, "myaccount", "", ""))
     ]
     for (url, parts) in azure
         ok, host, account, container, blob = CloudStore.parseAzureAccountContainerBlob(url; parseLocal=true)
@@ -269,6 +278,23 @@ end
         ("s3://bucket-name", (true, false, nothing, "bucket-name", "", "")),
         ("http://127.0.0.1:27181/bucket-name/key-name", (true, false, "http://127.0.0.1:27181", "bucket-name", "", "key-name")),
         ("http://127.0.0.1:27181/bucket-name", (true, false, "http://127.0.0.1:27181", "bucket-name", "", "")),
+
+        ("Https://bucket-name.s3-ACCELERATE.us-east-1.amazonaws.com/key-name", (true, true, nothing, "bucket-name", "us-east-1", "key-name")),
+        ("HTTPS://bucket-name.s3-accelerate.us-east-1.AMAZONAWS.com", (true, true, nothing, "bucket-name", "us-east-1", "")),
+        ("httpS://bucket-name.S3-ACCELERATE.AMAZONAWS.com/key-name", (true, true, nothing, "bucket-name", "", "key-name")),
+        ("hTTPs://bucket-name.s3-accelerate.amazonaws.com", (true, true, nothing, "bucket-name", "", "")),
+        ("HTTPs://bucket-name.s3.us-east-1.amazonaws.COM/key-name", (true, false, nothing, "bucket-name", "us-east-1", "key-name")),
+        ("httpS://bucket-name.S3.us-east-1.AMAZONAWS.COM", (true, false, nothing, "bucket-name", "us-east-1", "")),
+        ("HTTPs://bucket-name.S3.amazonaws.COM/key-name", (true, false, nothing, "bucket-name", "", "key-name")),
+        ("hTTPS://bucket-name.S3.AMAZONAWS.COM", (true, false, nothing, "bucket-name", "", "")),
+        ("hTTpS://s3.us-east-1.AMAZONAWS.com/bucket-name/key-name", (true, false, nothing, "bucket-name", "us-east-1", "key-name")),
+        ("HTTPS://s3.us-east-1.amazonaws.COM/bucket-name", (true, false, nothing, "bucket-name", "us-east-1", "")),
+        ("hTTPs://S3.AMAZONAWS.COM/bucket-name/key-name", (true, false, nothing, "bucket-name", "", "key-name")),
+        ("httPS://S3.AmAzonAws.com/bucket-name", (true, false, nothing, "bucket-name", "", "")),
+        ("S3://bucket-name/key-name", (true, false, nothing, "bucket-name", "", "key-name")),
+        ("S3://bucket-name", (true, false, nothing, "bucket-name", "", "")),
+        ("HTtp://127.0.0.1:27181/bucket-name/key-name", (true, false, "HTtp://127.0.0.1:27181", "bucket-name", "", "key-name")),
+        ("htTP://127.0.0.1:27181/bucket-name", (true, false, "htTP://127.0.0.1:27181", "bucket-name", "", "")),
     ]
     for (url, parts) in s3
         ok, accelerate, host, bucket, reg, key = CloudStore.parseAWSBucketRegionKey(url; parseLocal=true)

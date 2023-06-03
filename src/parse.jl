@@ -84,7 +84,7 @@ end
 function _validate_azure(ok::Bool, host, account, container, blob)
     return (
         ok,
-        isnothing(host) ? nothing : replace(String(host), "azure" => "https"; count=1),
+        isnothing(host) ? nothing : replace(String(host), r"^azure"i => "https"; count=1),
         String(validate_account_name(account)),
         isnothing(container) ? "" : String(validate_container_name(container)),
         isnothing(blob) ? "" : String(validate_blob(blob)),
@@ -95,7 +95,7 @@ function _validate_aws(ok::Bool, accelerate, host, bucket, region, key)
     return (
         ok,
         accelerate,
-        isnothing(host) ? nothing : replace(String(host), "s3" => "http"; count=1),
+        isnothing(host) ? nothing : replace(String(host), r"^(s|S)3" => "http"; count=1),
         String(validate_bucket_name(bucket, accelerate)),
         isnothing(region) || isempty(region) ? "" : String(validate_region(region)),
         isnothing(key) ? "" : String(validate_key(key)),
@@ -107,18 +107,18 @@ function parseAzureAccountContainerBlob(url; parseLocal::Bool=false)
     url = String(url)
     # https://myaccount.blob.core.windows.net/mycontainer/myblob
     # https://myaccount.blob.core.windows.net/mycontainer
-    m = match(r"^(https|azure)://(?<account>[^\.]+?)(\.blob\.core\.windows\.net)?/(?<container>[^/]+?)(?:/(?<blob>.+))?$", url)
+    m = match(r"^(https|azure)://(?<account>[^\.]+?)(\.blob\.core\.windows\.net)?/(?<container>[^/]+?)(?:/(?<blob>.+))?$"i, url)
     m !== nothing && return _validate_azure(true, nothing, m[:account], m[:container], m[:blob])
     if parseLocal
         # "https://127.0.0.1:45942/devstoreaccount1/jl-azurite-21807/"
-        m = match(r"^(?<host>(https|azure)://[\d|\.|:]+?)/(?<account>[^/]+?)/(?<container>[^/]+?)(?:/(?<blob>.+))?$", url)
+        m = match(r"^(?<host>(https|azure)://[\d|\.|:]+?)/(?<account>[^/]+?)/(?<container>[^/]+?)(?:/(?<blob>.+))?$"i, url)
         m !== nothing && return _validate_azure(true, m[:host], m[:account], m[:container], m[:blob])
     end
     # azure://myaccount/mycontainer/myblob
     # azure://myaccount/mycontainer
     # azure://myaccount
     m = match(r"^azure://(?<account>[^/]+)(?:/(?<container>.+))?(?:/(?<blob>.+))?$"i, url)
-    m !== nothing && return return _validate_azure(true, nothing, m[:account], m[:container], m[:blob])
+    m !== nothing && return _validate_azure(true, nothing, m[:account], m[:container], m[:blob])
     return (false, nothing, "", "", "")
 end
 
@@ -132,15 +132,15 @@ function parseAWSBucketRegionKey(url; parseLocal::Bool=false)
     # https://bucket-name.s3.region-code.amazonaws.com
     # https://bucket-name.s3.amazonaws.com/key-name
     # https://bucket-name.s3.amazonaws.com
-    m = match(r"^https://(?<bucket>[^\.]+)\.s3(?<accelerate>-accelerate)?(?:\.(?<region>[^\.]+))?\.amazonaws\.com(?:/(?<key>.+))?$", url)
+    m = match(r"^https://(?<bucket>[^\.]+)\.s3(?<accelerate>-accelerate)?(?:\.(?<region>[^\.]+))?\.amazonaws\.com(?:/(?<key>.+))?$"i, url)
     m !== nothing && return _validate_aws(true, !isnothing(m[:accelerate]), nothing, m[:bucket], m[:region], m[:key])
     # https://s3.region-code.amazonaws.com/bucket-name/key-name
     # https://s3.region-code.amazonaws.com/bucket-name
-    m = match(r"^https://s3(?:\.(?<region>[^\.]+))?\.amazonaws\.com/(?<bucket>[^/]+)(?:/(?<key>.+))?$", url)
+    m = match(r"^https://s3(?:\.(?<region>[^\.]+))?\.amazonaws\.com/(?<bucket>[^/]+)(?:/(?<key>.+))?$"i, url)
     m !== nothing && return _validate_aws(true, false, nothing, m[:bucket], m[:region], m[:key])
     if parseLocal
         # "http://127.0.0.1:27181/jl-minio-4483/"
-        m = match(r"^(?<host>(http|s3)://[\d|\.|:]+?)/(?<bucket>[^/]+?)(?:/(?<key>.+))?$", url)
+        m = match(r"^(?<host>(http|s3)://[\d|\.|:]+?)/(?<bucket>[^/]+?)(?:/(?<key>.+))?$"i, url)
         m !== nothing && return _validate_aws(true, false, m[:host], m[:bucket], "", m[:key])
     end
     # S3://bucket-name/key-name
