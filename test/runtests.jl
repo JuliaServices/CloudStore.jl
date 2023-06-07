@@ -305,6 +305,57 @@ end
         @test reg == parts[5]
         @test key == parts[6]
     end
+
+    # Only accept https, not http
+    invalid_azure = [
+        "http://myaccount.blob.core.windows.net/mycontainer/myblob",
+        "http://myaccount.blob.core.windows.net/mycontainer",
+        "http://myaccount",
+        "HTTP://myaccount.BLOB.core.windows.net/mycontainer/myblob",
+        "http://myaccount.blob.CORE.windows.net/mycontainer",
+        "Http://127.0.0.1:45942/myaccount/mycontainer",
+        "hTTP://127.0.0.1:45942/myaccount/mycontainer/myblob",
+    ]
+    for url in invalid_azure
+        ok, host, account, container, blob = CloudStore.parseAzureAccountContainerBlob(url)
+        @test !ok
+    end
+
+    invalid_s3 = [
+        "http://bucket-name.s3-accelerate.us-east-1.amazonaws.com/key-name",
+        "http://bucket-name.s3-accelerate.us-east-1.amazonaws.com",
+        "http://bucket-name.s3-accelerate.amazonaws.com/key-name",
+        "http://bucket-name.s3-accelerate.amazonaws.com",
+        "http://bucket-name.s3.us-east-1.amazonaws.com/key-name",
+        "http://bucket-name.s3.us-east-1.amazonaws.com",
+        "http://bucket-name.s3.amazonaws.com/key-name",
+        "http://bucket-name.s3.amazonaws.com",
+        "http://s3.us-east-1.amazonaws.com/bucket-name/key-name",
+        "http://s3.us-east-1.amazonaws.com/bucket-name",
+        "http://s3.amazonaws.com/bucket-name/key-name",
+        "http://s3.amazonaws.com/bucket-name",
+        "http://bucket-name/key-name",
+        "http://bucket-name",
+
+        "Http://bucket-name.s3-ACCELERATE.us-east-1.amazonaws.com/key-name",
+        "HTTP://bucket-name.s3-accelerate.us-east-1.AMAZONAWS.com",
+        "http://bucket-name.S3-ACCELERATE.AMAZONAWS.com/key-name",
+        "hTTP://bucket-name.s3-accelerate.amazonaws.com",
+        "HTTP://bucket-name.s3.us-east-1.amazonaws.COM/key-name",
+        "http://bucket-name.S3.us-east-1.AMAZONAWS.COM",
+        "HTTP://bucket-name.S3.amazonaws.COM/key-name",
+        "hTTP://bucket-name.S3.AMAZONAWS.COM",
+        "hTTp://s3.us-east-1.AMAZONAWS.com/bucket-name/key-name",
+        "HTTP://s3.us-east-1.amazonaws.COM/bucket-name",
+        "hTTP://S3.AMAZONAWS.COM/bucket-name/key-name",
+        "httP://S3.AmAzonAws.com/bucket-name",
+        "httP://bucket-name/key-name",
+        "httP://bucket-name",
+    ]
+    for url in invalid_s3
+        ok, accelerate, host, bucket, reg, key = CloudStore.parseAWSBucketRegionKey(url; parseLocal=true)
+        @test !ok
+    end
 end
 
 @testset "CloudStore.PrefetchedDownloadStream small readbytes!" begin
