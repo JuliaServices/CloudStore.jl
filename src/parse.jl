@@ -84,7 +84,7 @@ end
 function _validate_azure(ok::Bool, host, account, container, blob)
     return (
         ok,
-        isnothing(host) ? nothing : replace(String(host), r"^azure"i => "https"; count=1),
+        isnothing(host) ? nothing : replace(String(host), r"^azure"i => "http"; count=1),
         String(validate_account_name(account)),
         isnothing(container) ? "" : String(validate_container_name(container)),
         isnothing(blob) ? "" : String(validate_blob(blob)),
