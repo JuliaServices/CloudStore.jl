@@ -9,6 +9,7 @@ struct Object{T <: AbstractStore}
     key::String
     size::Int
     eTag::String
+    properties::Dict{String, Any}
 end
 
 Object(
@@ -16,7 +17,9 @@ Object(
     creds::Union{Nothing, AWS.Credentials, Azure.Credentials},
     key::AbstractString,
     size::Integer,
-    eTag::AbstractString) = Object(store, creds, String(key), Int(size), String(eTag))
+    eTag::AbstractString,
+    properties::Dict{String, Any} = Dict{String, Any}()) =
+            Object(store, creds, String(key), Int(size), String(eTag), properties)
 
 function Object(store::AbstractStore, key::String; credentials::Union{CloudCredentials, Nothing}=nothing, kw...)
     url = makeURL(store, key)

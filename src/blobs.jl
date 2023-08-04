@@ -9,20 +9,33 @@ const Credentials = Azure.Credentials
 
 API.cloudName(::Container) = "Blob Storage"
 
-object(b, creds, x) = Object(b, creds, x["Name"], parse(Int, x["Properties"]["Content-Length"]), API.etag(x["Properties"]["Etag"]))
+function make_object(store, creds, body, add_properties=false)
+    properties = Dict{String, Any}()
+    if add_properties
+        # body is a Dict{Any, Any}, convert keys to strings
+        for (key,value) in body
+            properties[key] = value
+        end
+    end
+
+    return Object(store, creds, body["Name"],
+                  parse(Int, body["Properties"]["Content-Length"]),
+                  API.etag(body["Properties"]["Etag"]), properties)
+end
 
 API.maxListKeys(::Container) = 5000
 API.listMaxKeysQuery(::Container) = "maxresults"
 API.continuationToken(::Container) = "marker"
 
-function API.listObjects(x::Container, query, result=nothing; credentials=nothing, kw...)
+function API.listObjects(x::Container, query, result=nothing; credentials=nothing,
+                                              get_properties=false, kw...)
     query["restype"] = "container"
     query["comp"] = "list"
     result = xml_dict(String(Azure.get(x.baseurl; query, credentials, kw...).body))["EnumerationResults"]
     if isempty(result["Blobs"])
         return (Object[], "")
     end
-    contents = map(y -> object(x, credentials, y), API.asArray(result["Blobs"]["Blob"]))
+    contents = map(y -> make_object(x, credentials, y, get_properties), API.asArray(result["Blobs"]["Blob"]))
     return (contents, result["NextMarker"])
 end
 

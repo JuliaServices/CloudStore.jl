@@ -215,6 +215,13 @@ end
                 objs = Blobs.list(container; maxKeys=1, credentials)
                 @test map(x -> x.key, objs) == ["test.csv", "test2.csv", "test3.csv", "test4.csv", "test5.csv", "test6.csv"]
 
+                # list with properties
+                objs = Blobs.list(container; credentials, get_properties=true)
+                @test length(objs) == 6
+                for obj in objs
+                    @test obj.properties["Properties"]["Creation-Time"] != ""
+                end
+
                 # delete
                 Blobs.delete(container, "test.csv"; credentials)
                 Blobs.delete(container, "test2.csv"; credentials)
