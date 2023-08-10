@@ -245,8 +245,8 @@ end
         ("azure://myaccount.blob.core.windows.net/mycontainer", (true, nothing, "myaccount", "mycontainer", "")),
         ("https://127.0.0.1:45942/myaccount/mycontainer", (true, "https://127.0.0.1:45942", "myaccount", "mycontainer", "")),
         ("https://127.0.0.1:45942/myaccount/mycontainer/myblob", (true, "https://127.0.0.1:45942", "myaccount", "mycontainer", "myblob")),
-        ("azure://127.0.0.1:45942/myaccount/mycontainer", (true, "https://127.0.0.1:45942", "myaccount", "mycontainer", "")),
-        ("azure://127.0.0.1:45942/myaccount/mycontainer/myblob", (true, "https://127.0.0.1:45942", "myaccount", "mycontainer", "myblob")),
+        ("azure://127.0.0.1:45942/myaccount/mycontainer", (true, "http://127.0.0.1:45942", "myaccount", "mycontainer", "")),
+        ("azure://127.0.0.1:45942/myaccount/mycontainer/myblob", (true, "http://127.0.0.1:45942", "myaccount", "mycontainer", "myblob")),
         ("azure://myaccount", (true, nothing, "myaccount", "", "")),
 
         ("HTTPS://myaccount.BLOB.core.windows.net/mycontainer/myblob", (true, nothing, "myaccount", "mycontainer", "myblob")),
@@ -255,8 +255,8 @@ end
         ("azurE://myaccount.blob.core.windows.NET/mycontainer", (true, nothing, "myaccount", "mycontainer", "")),
         ("Https://127.0.0.1:45942/myaccount/mycontainer", (true, "Https://127.0.0.1:45942", "myaccount", "mycontainer", "")),
         ("hTTPs://127.0.0.1:45942/myaccount/mycontainer/myblob", (true, "hTTPs://127.0.0.1:45942", "myaccount", "mycontainer", "myblob")),
-        ("Azure://127.0.0.1:45942/myaccount/mycontainer", (true, "https://127.0.0.1:45942", "myaccount", "mycontainer", "")),
-        ("aZURe://127.0.0.1:45942/myaccount/mycontainer/myblob", (true, "https://127.0.0.1:45942", "myaccount", "mycontainer", "myblob")),
+        ("Azure://127.0.0.1:45942/myaccount/mycontainer", (true, "http://127.0.0.1:45942", "myaccount", "mycontainer", "")),
+        ("aZURe://127.0.0.1:45942/myaccount/mycontainer/myblob", (true, "http://127.0.0.1:45942", "myaccount", "mycontainer", "myblob")),
         ("Azure://myaccount", (true, nothing, "myaccount", "", ""))
     ]
     for (url, parts) in azure

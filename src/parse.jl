@@ -84,7 +84,8 @@ end
 function _validate_azure(ok::Bool, host, account, container, blob)
     return (
         ok,
-        isnothing(host) ? nothing : replace(String(host), r"^azure"i => "https"; count=1),
+        # We only replace the host when parseLocal is true
+        isnothing(host) ? nothing : replace(String(host), r"^azure"i => "http"; count=1),
         String(validate_account_name(account)),
         isnothing(container) ? "" : String(validate_container_name(container)),
         isnothing(blob) ? "" : String(validate_blob(blob)),
@@ -95,6 +96,7 @@ function _validate_aws(ok::Bool, accelerate, host, bucket, region, key)
     return (
         ok,
         accelerate,
+        # We only replace the host when parseLocal is true
         isnothing(host) ? nothing : replace(String(host), r"^(s|S)3" => "http"; count=1),
         String(validate_bucket_name(bucket, accelerate)),
         isnothing(region) || isempty(region) ? "" : String(validate_region(region)),
