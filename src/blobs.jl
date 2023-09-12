@@ -72,14 +72,14 @@ end
 delete(x::Container, key::String; kw...) = Azure.delete(API.makeURL(x, key); kw...)
 delete(x::Object; kw...) = delete(x.store, x.key; credentials=x.credentials, kw...)
 
-function create_append_blob(c::Container, path::String; kw...)
-    Azure.put(API.makeURL(c, path), ["x-ms-blob-type" => "AppendBlob"], ""; kw...)
+function create_append_blob(c::Container, key::String; kw...)
+    Azure.put(API.makeURL(c, key), ["x-ms-blob-type" => "AppendBlob"], ""; kw...)
 end
 
 # https://learn.microsoft.com/en-us/rest/api/storageservices/append-block
-function append_block(c::Container, path::String, data::AbstractVector{UInt8}; kw...)
-    url = API.makeURL(c, path) * "?comp=appendblock"
-    Azure.put(url, data; kw...)
+function append_block(c::Container, key::String, data::AbstractVector{UInt8}; kw...)
+    url = API.makeURL(c, key)
+    Azure.put(url, [], data; query=Dict("comp" => "block"), kw...)
 end
 
 for func in (:list, :get, :head, :put, :delete)

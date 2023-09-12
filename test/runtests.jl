@@ -237,9 +237,10 @@ end
         
         # test appendable blobs
         append_blob_name = "my_append_blob"
-        Blobs.create_append_blob(container, append_blob_name)
+        Blobs.create_append_blob(container, append_blob_name; credentials)
         for i in 1:10
-            Blobs.append_block(container, append_blob_name, string(i) * "\n")
+            payload = codeunits(string(i) * "\n")
+            Blobs.append_block(container, append_blob_name, payload; credentials)
         end
         contents = Blobs.get(container, append_blob_name; credentials)
         @test length(split(contents, "\n")) == 10
