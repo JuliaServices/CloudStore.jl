@@ -79,7 +79,7 @@ end
 # https://learn.microsoft.com/en-us/rest/api/storageservices/append-block
 function append_block(c::Container, key::String, data::AbstractVector{UInt8}; kw...)
     url = API.makeURL(c, key)
-    Azure.put(url, [], data; query=Dict("comp" => "block"), kw...)
+    Azure.put(url, [], data; query=Dict("comp" => "appendblock"), kw...)
 end
 
 for func in (:list, :get, :head, :put, :delete)
