@@ -243,7 +243,7 @@ end
             Blobs.append_block(container, append_blob_name, payload; credentials)
         end
         contents = Blobs.get(container, append_blob_name; credentials)
-        @test length(split(contents, "\n")) == 10
+        @test String(contents) == "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n"
     end
 end
 
