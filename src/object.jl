@@ -274,6 +274,54 @@ mutable struct PrefetchedDownloadStream{T <: Object} <: IO
         return PrefetchedDownloadStream(object, prefetch_size; prefetch_multipart_size, kw...)
     end
 end
+
+mutable struct MultipartUploadStream <: IO
+    store::AbstractStore
+    url::String
+    credentials::Union{Nothing, AWS.Credentials, Azure.Credentials}
+    uploadState
+    sync::OrderedSynchronizer
+    eTags::Vector{String}
+    @atomic cur_part_id::Int
+
+    function MultipartUploadStream(
+        store::AbstractStore,
+        key::String;
+        credentials::Union{CloudCredentials, Nothing}=nothing,
+        kw...
+    )
+        url = makeURL(store, key)
+        uploadState = API.startMultipartUpload(store, key; credentials, kw...)
+        return new(
+            store,
+            url,
+            credentials,
+            uploadState,
+            OrderedSynchronizer(1),
+            Vector{String}(),
+            1
+        )
+    end
+end
+
+function Base.write(x::MultipartUploadStream, bytes::Vector{UInt8}; kw...)
+    # first atomically increment our part counter
+    i = @atomic x.cur_part_id += 1
+    # upload the part
+    parteTag, wb = uploadPart(x.store, x.url, bytes, i, x.uploadState; x.credentials, kw...)
+    @show parteTag
+    # add part eTag to our collection of eTags in the right order
+    put!(x.sync, x.cur_part_id) do
+        push!(x.eTags, parteTag)
+    end
+    @show "end of write"
+    return wb
+end
+
+function Base.close(x::MultipartUploadStream; kw...)
+    return API.completeMultipartUpload(x, x.url, x.eTags, x.uploadState; kw...)
+end
+
 Base.eof(io::PrefetchedDownloadStream) = io.pos > io.len
 bytesremaining(io::PrefetchedDownloadStream) = io.len - io.pos + 1
 function Base.bytesavailable(io::PrefetchedDownloadStream)

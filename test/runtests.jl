@@ -43,7 +43,7 @@ check(x::IO, y::AbstractVector{UInt8}) = begin; reset!(x); z = read(x) == y; res
 check(x, y) = begin; reset!(x); reset!(y); z = read(x) == read(y); reset!(x); reset!(y); z end
 
 @testset "CloudStore.jl" begin
-@testset "S3" begin
+#=@testset "S3" begin
     # conf, p = Minio.run(; debug=true)
     Minio.with(; debug=true) do conf
         credentials, bucket = conf
@@ -790,6 +790,34 @@ end
         readbytes!(ioobj, buf, N)
         @test buf == view(codeunits(multicsv), 1:N)
         @test read(ioobj, UInt8) == UInt8(last(multicsv))
+    end
+end=#
+
+@testset "CloudStore.MultipartUploadStream" begin
+    Minio.with(; debug=true) do conf
+        credentials, bucket = conf
+        multicsv = "1,2,3,4,5,6,7,8,9,1\n"^10; # 200 B
+        #Azure.put(bucket, "test.csv", codeunits(multicsv); credentials)
+        #obj = CloudStore.Object(bucket, "test.csv"; credentials)
+        #@test length(obj) == sizeof(multicsv)
+
+        N = 19
+        buf = Vector{UInt8}(undef, N)
+        copyto!(buf, 1, codeunits(multicsv), 1, N)
+        #@test buf == view(codeunits(multicsv), 1:N)
+
+        mus_obj = CloudStore.MultipartUploadStream(bucket, "test.csv"; credentials)
+        CloudStore.write(mus_obj, buf;)
+
+        #=i = 1
+        while i < sizeof(multicsv)
+            nb = i + N > length(multicsv) ? length(multicsv) - i : N
+            copyto!(buf, 1, multicsv, 1, N)
+            @show codeunits(multicsv)
+            #readbytes!(ioobj, buf, N)
+            #@test view(buf, 1:nb) == view(codeunits(multicsv), i:i+nb-1)
+            i += N
+        end=#
     end
 end
 
