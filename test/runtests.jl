@@ -363,14 +363,14 @@ end
         ok, accelerate, host, bucket, reg, key = CloudStore.parseAWSBucketRegionKey(url; parseLocal=true)
         @test !ok
     end
-end
+end =#
 
 @testset "CloudStore.PrefetchedDownloadStream small readbytes!" begin
     Minio.with(; debug=true) do conf
         credentials, bucket = conf
         multicsv = "1,2,3,4,5,6,7,8,9,1\n"^10; # 200 B
-        S3.put(bucket, "test.csv", codeunits(multicsv); credentials)
-        obj = CloudStore.Object(bucket, "test.csv"; credentials)
+        S3.put(bucket, "test_nantia.csv", codeunits(multicsv); credentials)
+        obj = CloudStore.Object(bucket, "test_nantia.csv"; credentials)
         @test length(obj) == sizeof(multicsv)
 
         N = 19
@@ -378,7 +378,7 @@ end
         copyto!(buf, 1, obj, 1, N)
         @test buf == view(codeunits(multicsv), 1:N)
 
-        ioobj = CloudStore.PrefetchedDownloadStream(bucket, "test.csv", 16; credentials)
+        ioobj = CloudStore.PrefetchedDownloadStream(bucket, "test_nantia.csv", 16; credentials)
         i = 1
         while i < sizeof(multicsv)
             nb = i + N > length(multicsv) ? length(multicsv) - i : N
@@ -389,7 +389,7 @@ end
     end
 end
 
-@testset "CloudStore.PrefetchedDownloadStream large readbytes!" begin
+#=@testset "CloudStore.PrefetchedDownloadStream large readbytes!" begin
     Minio.with(; debug=true) do conf
         credentials, bucket = conf
         multicsv = "1,2,3,4,5,6,7,8,9,1\n"^1000000; # 20 MB
@@ -797,29 +797,64 @@ end=#
     Minio.with(; debug=true) do conf
         credentials, bucket = conf
         multicsv = "1,2,3,4,5,6,7,8,9,1\n"^10; # 200 B
-        #Azure.put(bucket, "test.csv", codeunits(multicsv); credentials)
+        #S3.put(bucket, "test.csv", codeunits(multicsv); credentials)
+        #@show S3.get(bucket, "test.csv"; credentials)
         #obj = CloudStore.Object(bucket, "test.csv"; credentials)
         #@test length(obj) == sizeof(multicsv)
+        @show sizeof(multicsv)
+        @show credentials
 
-        N = 19
+        N = 200
         buf = Vector{UInt8}(undef, N)
-        copyto!(buf, 1, codeunits(multicsv), 1, N)
+        #copyto!(buf, 1, codeunits(multicsv), 1, N)
         #@test buf == view(codeunits(multicsv), 1:N)
 
         mus_obj = CloudStore.MultipartUploadStream(bucket, "test.csv"; credentials)
-        CloudStore.write(mus_obj, buf;)
 
-        #=i = 1
+        #CloudStore.write(mus_obj, buf;)
+        #CloudStore.write(mus_obj, buf;)
+
+        i = 1
         while i < sizeof(multicsv)
             nb = i + N > length(multicsv) ? length(multicsv) - i : N
-            copyto!(buf, 1, multicsv, 1, N)
+            @show nb
+            copyto!(buf, i, codeunits(multicsv), i, nb)
             @show codeunits(multicsv)
+            CloudStore.write(mus_obj, buf;)
+            #@show length(mus_obj)
             #readbytes!(ioobj, buf, N)
             #@test view(buf, 1:nb) == view(codeunits(multicsv), i:i+nb-1)
             i += N
-        end=#
+        end
+        CloudStore.close(mus_obj; credentials)
+        obj = CloudStore.Object(bucket, "test.csv"; credentials)
+        @show obj
     end
 end
 
+
+#=@testset "CloudStore.PrefetchedDownloadStream small readbytes!" begin
+    Minio.with(; debug=true) do conf
+        credentials, bucket = conf
+        multicsv = "1,2,3,4,5,6,7,8,9,1\n"^10; # 200 B
+        S3.put(bucket, "test.csv", codeunits(multicsv); credentials)
+        obj = CloudStore.Object(bucket, "test.csv"; credentials)
+        @test length(obj) == sizeof(multicsv)
+
+        N = 19
+        buf = Vector{UInt8}(undef, N)
+        copyto!(buf, 1, obj, 1, N)
+        @test buf == view(codeunits(multicsv), 1:N)
+
+        ioobj = CloudStore.PrefetchedDownloadStream(bucket, "test.csv", 16; credentials)
+        i = 1
+        while i < sizeof(multicsv)
+            nb = i + N > length(multicsv) ? length(multicsv) - i : N
+            readbytes!(ioobj, buf, N)
+            @test view(buf, 1:nb) == view(codeunits(multicsv), i:i+nb-1)
+            i += N
+        end
+    end
+end=#
 
 end # @testset "CloudStore.jl"

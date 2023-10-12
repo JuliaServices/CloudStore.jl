@@ -305,21 +305,21 @@ mutable struct MultipartUploadStream <: IO
 end
 
 function Base.write(x::MultipartUploadStream, bytes::Vector{UInt8}; kw...)
-    # first atomically increment our part counter
-    i = @atomic x.cur_part_id += 1
     # upload the part
-    parteTag, wb = uploadPart(x.store, x.url, bytes, i, x.uploadState; x.credentials, kw...)
-    @show parteTag
+    @show x.cur_part_id
+    parteTag, wb = uploadPart(x.store, x.url, bytes, x.cur_part_id, x.uploadState; x.credentials, kw...)
     # add part eTag to our collection of eTags in the right order
     put!(x.sync, x.cur_part_id) do
         push!(x.eTags, parteTag)
     end
-    @show "end of write"
+    @show x.eTags
+    # atomically increment our part counter
+    @atomic x.cur_part_id += 1
     return wb
 end
 
 function Base.close(x::MultipartUploadStream; kw...)
-    return API.completeMultipartUpload(x, x.url, x.eTags, x.uploadState; kw...)
+    return API.completeMultipartUpload(x.store, x.url, x.eTags, x.uploadState; kw...)
 end
 
 Base.eof(io::PrefetchedDownloadStream) = io.pos > io.len
