@@ -306,13 +306,11 @@ end
 
 function Base.write(x::MultipartUploadStream, bytes::Vector{UInt8}; kw...)
     # upload the part
-    @show x.cur_part_id
     parteTag, wb = uploadPart(x.store, x.url, bytes, x.cur_part_id, x.uploadState; x.credentials, kw...)
     # add part eTag to our collection of eTags in the right order
     put!(x.sync, x.cur_part_id) do
         push!(x.eTags, parteTag)
     end
-    @show x.eTags
     # atomically increment our part counter
     @atomic x.cur_part_id += 1
     return wb
