@@ -275,51 +275,6 @@ mutable struct PrefetchedDownloadStream{T <: Object} <: IO
     end
 end
 
-mutable struct MultipartUploadStream <: IO
-    store::AbstractStore
-    url::String
-    credentials::Union{Nothing, AWS.Credentials, Azure.Credentials}
-    uploadState
-    sync::OrderedSynchronizer
-    eTags::Vector{String}
-    @atomic cur_part_id::Int
-
-    function MultipartUploadStream(
-        store::AbstractStore,
-        key::String;
-        credentials::Union{CloudCredentials, Nothing}=nothing,
-        kw...
-    )
-        url = makeURL(store, key)
-        uploadState = API.startMultipartUpload(store, key; credentials, kw...)
-        return new(
-            store,
-            url,
-            credentials,
-            uploadState,
-            OrderedSynchronizer(1),
-            Vector{String}(),
-            1
-        )
-    end
-end
-
-function Base.write(x::MultipartUploadStream, bytes::Vector{UInt8}; kw...)
-    # upload the part
-    parteTag, wb = uploadPart(x.store, x.url, bytes, x.cur_part_id, x.uploadState; x.credentials, kw...)
-    # add part eTag to our collection of eTags in the right order
-    put!(x.sync, x.cur_part_id) do
-        push!(x.eTags, parteTag)
-    end
-    # atomically increment our part counter
-    @atomic x.cur_part_id += 1
-    return wb
-end
-
-function Base.close(x::MultipartUploadStream; kw...)
-    return API.completeMultipartUpload(x.store, x.url, x.eTags, x.uploadState; kw...)
-end
-
 Base.eof(io::PrefetchedDownloadStream) = io.pos > io.len
 bytesremaining(io::PrefetchedDownloadStream) = io.len - io.pos + 1
 function Base.bytesavailable(io::PrefetchedDownloadStream)
@@ -417,4 +372,84 @@ function Base.read(io::PrefetchedDownloadStream, ::Type{UInt8})
         io.buf = nothing
     end
     return b
+end
+
+"""
+    MultipartUploadStream <: IO
+    MultipartUploadStream(args...; kwargs...) -> MultipartUploadStream
+
+An in-memory IO stream that uploads chunks to a URL in blob storage.
+
+Data chunks are written to a buffer and uploaded as distinct separate parts to blob storage.
+Each part is tagged with an id and we keep the tags into a vector. We also increment a
+counter to keep track of the number of parts. When there are no more data chunks to upload,
+we send a POST request with an id for the entire upload.
+
+When using Minio the minimum upload size per part is 5MB according to S3 specifications:
+https://github.com/minio/minio/issues/11076
+I couldn't find a minimum upload size for Azure blob storage.
+
+**Writing to this stream is not thread-safe**.
+
+# Arguments
+* `store::AbstractStore`: The S3 Bucket / Azure Container object
+* `key::String`: S3 key / Azure blob resource name
+* `url::String`: S3 / Azure URL to resource
+
+# Keywords
+* `credentials::Union{CloudCredentials, Nothing}=nothing`: Credentials object used in HTTP
+    requests
+* `kwargs...`: HTTP keyword arguments are forwarded to underlying HTTP requests,
+
+## Examples
+```
+# Get an IO stream for a remote CSV file `test.csv` living in your S3 bucket
+io = MultipartUploadStream(bucket, "test.csv"; credentials)
+```
+"""
+mutable struct MultipartUploadStream <: IO
+    store::AbstractStore
+    key::String
+    url::String
+    credentials::Union{Nothing, AWS.Credentials, Azure.Credentials}
+    uploadState
+    sync::OrderedSynchronizer
+    eTags::Vector{String}
+    @atomic cur_part_id::Int
+
+    function MultipartUploadStream(
+        store::AbstractStore,
+        key::String;
+        credentials::Union{CloudCredentials, Nothing}=nothing,
+        kw...
+    )
+        url = makeURL(store, key)
+        uploadState = API.startMultipartUpload(store, key; credentials, kw...)
+        return new(
+            store,
+            key,
+            url,
+            credentials,
+            uploadState,
+            OrderedSynchronizer(1),
+            Vector{String}(),
+            1
+        )
+    end
+end
+
+function Base.write(x::MultipartUploadStream, bytes::Vector{UInt8}; kw...)
+    # upload the part
+    parteTag, wb = uploadPart(x.store, x.url, bytes, x.cur_part_id, x.uploadState; x.credentials, kw...)
+    # add part eTag to our collection of eTags in the right order
+    put!(x.sync, x.cur_part_id) do
+        push!(x.eTags, parteTag)
+    end
+    # atomically increment our part counter
+    @atomic x.cur_part_id += 1
+    return wb
+end
+
+function Base.close(x::MultipartUploadStream; kw...)
+    return API.completeMultipartUpload(x.store, x.url, x.eTags, x.uploadState; kw...)
 end
