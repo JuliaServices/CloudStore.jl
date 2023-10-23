@@ -147,6 +147,29 @@ function _download_task(io; kw...)
     return nothing
 end
 
+function _upload_task(io; kw...)
+    try
+        while true
+            upload_buffer = take!(io.upload_queue)
+            @show typeof(upload_buffer)
+            # upload the part
+            parteTag, wb = uploadPart(io.store, io.url, upload_buffer, io.cur_part_id, io.uploadState; io.credentials, kw...)
+            # add part eTag to our collection of eTags in the right order
+            put!(io.sync, io.cur_part_id) do
+                push!(io.eTags, parteTag)
+            end
+            # atomically increment our part counter
+            @atomic io.cur_part_id += 1
+        end
+    catch e
+        isopen(io.upload_queue) && close(io.upload_queue, e)
+        Base.@lock io.cond.cond_wait begin
+            notify(io.cond.cond_wait, e, all=true, error=true)
+        end
+    end
+    return nothing
+end
+
 # assumes part_size > 0
 _ndownload_tasks(total_size, part_size, numthreads=Threads.nthreads()) =
     min(numthreads, max(1, div(total_size, part_size, RoundUp)))
@@ -416,6 +439,8 @@ mutable struct MultipartUploadStream <: IO
     sync::OrderedSynchronizer
     eTags::Vector{String}
     @atomic cur_part_id::Int
+    upload_queue::::Channel{Tuple{Int,UnitRange{Int},Vector{UInt8}}}
+    cond::TaskCondition
 
     function MultipartUploadStream(
         store::AbstractStore,
@@ -425,7 +450,7 @@ mutable struct MultipartUploadStream <: IO
     )
         url = makeURL(store, key)
         uploadState = API.startMultipartUpload(store, key; credentials, kw...)
-        return new(
+        io = new(
             store,
             key,
             url,
@@ -433,21 +458,19 @@ mutable struct MultipartUploadStream <: IO
             uploadState,
             OrderedSynchronizer(1),
             Vector{String}(),
-            1
+            1,
+            Channel{Tuple{Int,UnitRange{Int},Vector{UInt8}}}(Inf),
+            TaskCondition()
         )
+        for _ in 1:8 # How many tasks should we spawn? We don't know the size of the upload from the beginning.
+            Threads.@spawn _upload_task($io; $kw...)
+        end
+        return io
     end
 end
 
 function Base.write(x::MultipartUploadStream, bytes::Vector{UInt8}; kw...)
-    # upload the part
-    parteTag, wb = uploadPart(x.store, x.url, bytes, x.cur_part_id, x.uploadState; x.credentials, kw...)
-    # add part eTag to our collection of eTags in the right order
-    put!(x.sync, x.cur_part_id) do
-        push!(x.eTags, parteTag)
-    end
-    # atomically increment our part counter
-    @atomic x.cur_part_id += 1
-    return wb
+    put!(x.upload_queue, bytes)
 end
 
 function Base.close(x::MultipartUploadStream; kw...)
