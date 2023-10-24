@@ -147,29 +147,6 @@ function _download_task(io; kw...)
     return nothing
 end
 
-function _upload_task(io; kw...)
-    try
-        while true
-            upload_buffer = take!(io.upload_queue)
-            @show typeof(upload_buffer)
-            # upload the part
-            parteTag, wb = uploadPart(io.store, io.url, upload_buffer, io.cur_part_id, io.uploadState; io.credentials, kw...)
-            # add part eTag to our collection of eTags in the right order
-            put!(io.sync, io.cur_part_id) do
-                push!(io.eTags, parteTag)
-            end
-            # atomically increment our part counter
-            @atomic io.cur_part_id += 1
-        end
-    catch e
-        isopen(io.upload_queue) && close(io.upload_queue, e)
-        Base.@lock io.cond.cond_wait begin
-            notify(io.cond.cond_wait, e, all=true, error=true)
-        end
-    end
-    return nothing
-end
-
 # assumes part_size > 0
 _ndownload_tasks(total_size, part_size, numthreads=Threads.nthreads()) =
     min(numthreads, max(1, div(total_size, part_size, RoundUp)))
@@ -397,6 +374,29 @@ function Base.read(io::PrefetchedDownloadStream, ::Type{UInt8})
     return b
 end
 
+function _upload_task(io; kw...)
+    try
+        upload_buffer = take!(io.upload_queue)
+        @show typeof(upload_buffer)
+        # upload the part
+        parteTag, wb = uploadPart(io.store, io.url, upload_buffer, io.cur_part_id, io.uploadState; io.credentials, kw...)
+        # add part eTag to our collection of eTags in the right order
+        @show io.sync.i
+        put!(io.sync, io.cur_part_id) do
+            push!(io.eTags, parteTag)
+        end
+        @show "Tag added"
+        # atomically increment our part counter
+        @atomic io.cur_part_id += 1
+    catch e
+        isopen(io.upload_queue) && close(io.upload_queue, e)
+        Base.@lock io.cond.cond_wait begin
+            notify(io.cond.cond_wait, e, all=true, error=true)
+        end
+    end
+    return nothing
+end
+
 """
     MultipartUploadStream <: IO
     MultipartUploadStream(args...; kwargs...) -> MultipartUploadStream
@@ -433,14 +433,15 @@ io = MultipartUploadStream(bucket, "test.csv"; credentials)
 mutable struct MultipartUploadStream <: IO
     store::AbstractStore
     key::String
-    url::String
     credentials::Union{Nothing, AWS.Credentials, Azure.Credentials}
+    url::String
     uploadState
     sync::OrderedSynchronizer
     eTags::Vector{String}
     @atomic cur_part_id::Int
-    upload_queue::::Channel{Tuple{Int,UnitRange{Int},Vector{UInt8}}}
-    cond::TaskCondition
+    upload_queue::Channel{Vector{UInt8}}
+    cond_wait::Threads.Condition
+    ntasks::Int
 
     function MultipartUploadStream(
         store::AbstractStore,
@@ -453,26 +454,39 @@ mutable struct MultipartUploadStream <: IO
         io = new(
             store,
             key,
-            url,
             credentials,
+            url,
             uploadState,
             OrderedSynchronizer(1),
             Vector{String}(),
             1,
-            Channel{Tuple{Int,UnitRange{Int},Vector{UInt8}}}(Inf),
-            TaskCondition()
+            Channel{Vector{UInt8}}(Inf),
+            Threads.Condition(),
+            1
         )
-        for _ in 1:8 # How many tasks should we spawn? We don't know the size of the upload from the beginning.
-            Threads.@spawn _upload_task($io; $kw...)
-        end
         return io
     end
 end
 
 function Base.write(x::MultipartUploadStream, bytes::Vector{UInt8}; kw...)
-    put!(x.upload_queue, bytes)
+    buf = Vector{UInt8}(undef, min(MULTIPART_SIZE, length(bytes)))
+    put!(x.upload_queue, buf)
+    x.ntasks += 1
+    Threads.@spawn _upload_task(x; kw...)
+    @show "thread spawned"
+    return nothing
 end
 
 function Base.close(x::MultipartUploadStream; kw...)
+    Base.@lock x.cond_wait begin
+        while true
+            @show x.sync.i
+            @show x.ntasks
+            x.sync.i == x.ntasks && break
+            wait(x.cond_wait)
+        end
+    end
+    @show "after lock"
+    close(x.upload_queue)
     return API.completeMultipartUpload(x.store, x.url, x.eTags, x.uploadState; kw...)
 end
