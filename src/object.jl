@@ -374,24 +374,28 @@ function Base.read(io::PrefetchedDownloadStream, ::Type{UInt8})
     return b
 end
 
-function _upload_task(io; kw...)
+function _upload_task(io, lk; kw...)
     try
         upload_buffer = take!(io.upload_queue)
-        @show typeof(upload_buffer)
         # upload the part
         parteTag, wb = uploadPart(io.store, io.url, upload_buffer, io.cur_part_id, io.uploadState; io.credentials, kw...)
         # add part eTag to our collection of eTags in the right order
-        @show io.sync.i
-        put!(io.sync, io.cur_part_id) do
-            push!(io.eTags, parteTag)
+        lock(lk) do
+            put!(io.sync, io.cur_part_id) do
+                push!(io.eTags, parteTag)
+            end
         end
-        @show "Tag added"
         # atomically increment our part counter
         @atomic io.cur_part_id += 1
+        Base.@lock io.cond_wait begin
+            io.ntasks += 1
+            notify(io.cond_wait)
+        end
     catch e
+        @show e
         isopen(io.upload_queue) && close(io.upload_queue, e)
-        Base.@lock io.cond.cond_wait begin
-            notify(io.cond.cond_wait, e, all=true, error=true)
+        Base.@lock io.cond_wait begin
+            notify(io.cond_wait, e, all=true, error=true)
         end
     end
     return nothing
@@ -433,8 +437,8 @@ io = MultipartUploadStream(bucket, "test.csv"; credentials)
 mutable struct MultipartUploadStream <: IO
     store::AbstractStore
     key::String
-    credentials::Union{Nothing, AWS.Credentials, Azure.Credentials}
     url::String
+    credentials::Union{Nothing, AWS.Credentials, Azure.Credentials}
     uploadState
     sync::OrderedSynchronizer
     eTags::Vector{String}
@@ -451,11 +455,11 @@ mutable struct MultipartUploadStream <: IO
     )
         url = makeURL(store, key)
         uploadState = API.startMultipartUpload(store, key; credentials, kw...)
-        io = new(
+        return new(
             store,
             key,
-            credentials,
             url,
+            credentials,
             uploadState,
             OrderedSynchronizer(1),
             Vector{String}(),
@@ -464,29 +468,23 @@ mutable struct MultipartUploadStream <: IO
             Threads.Condition(),
             1
         )
-        return io
     end
 end
 
 function Base.write(x::MultipartUploadStream, bytes::Vector{UInt8}; kw...)
-    buf = Vector{UInt8}(undef, min(MULTIPART_SIZE, length(bytes)))
-    put!(x.upload_queue, buf)
-    x.ntasks += 1
-    Threads.@spawn _upload_task(x; kw...)
-    @show "thread spawned"
+    put!(x.upload_queue, bytes)
+    lk = ReentrantLock()
+    Threads.@spawn _upload_task(x, lk; kw...)
     return nothing
 end
 
 function Base.close(x::MultipartUploadStream; kw...)
     Base.@lock x.cond_wait begin
         while true
-            @show x.sync.i
-            @show x.ntasks
             x.sync.i == x.ntasks && break
             wait(x.cond_wait)
         end
     end
-    @show "after lock"
     close(x.upload_queue)
     return API.completeMultipartUpload(x.store, x.url, x.eTags, x.uploadState; kw...)
 end
