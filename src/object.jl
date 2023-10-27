@@ -374,25 +374,25 @@ function Base.read(io::PrefetchedDownloadStream, ::Type{UInt8})
     return b
 end
 
-function _upload_task(io, lk; kw...)
+function _upload_task(io; kw...)
     try
         upload_buffer = take!(io.upload_queue)
         # upload the part
-        parteTag, wb = uploadPart(io.store, io.url, upload_buffer, io.cur_part_id, io.uploadState; io.credentials, kw...)
+        parteTag = uploadPart(io.store, io.url, upload_buffer, io.cur_part_id, io.uploadState; io.credentials, kw...)
         # add part eTag to our collection of eTags in the right order
-        lock(lk) do
-            put!(io.sync, io.cur_part_id) do
-                push!(io.eTags, parteTag)
-            end
-        end
         # atomically increment our part counter
+        @show io.cur_part_id
+        @show io.sync.i
         @atomic io.cur_part_id += 1
+        put!(io.sync, io.cur_part_id) do
+            push!(io.eTags, parteTag)
+        end
         Base.@lock io.cond_wait begin
             io.ntasks -= 1
             notify(io.cond_wait)
         end
     catch e
-        @show e
+        #@show e
         isopen(io.upload_queue) && close(io.upload_queue, e)
         Base.@lock io.cond_wait begin
             notify(io.cond_wait, e, all=true, error=true)
@@ -463,7 +463,7 @@ mutable struct MultipartUploadStream <: IO
             uploadState,
             OrderedSynchronizer(1),
             Vector{String}(),
-            1,
+            0,
             Channel{Vector{UInt8}}(Inf),
             Threads.Condition(),
             0
@@ -473,9 +473,11 @@ end
 
 function Base.write(x::MultipartUploadStream, bytes::Vector{UInt8}; kw...)
     put!(x.upload_queue, bytes)
-    lk = ReentrantLock()
-    x.ntasks += 1
-    Threads.@spawn _upload_task(x, lk; kw...)
+    Threads.@spawn _upload_task(x; kw...)
+    Base.@lock x.cond_wait begin
+        x.ntasks += 1
+        notify(x.cond_wait)
+    end
     return nothing
 end
 
@@ -488,6 +490,7 @@ function Base.close(x::MultipartUploadStream; kw...)
             wait(x.cond_wait)
         end
     end
+    @show x.eTags
     close(x.upload_queue)
     return API.completeMultipartUpload(x.store, x.url, x.eTags, x.uploadState; kw...)
 end

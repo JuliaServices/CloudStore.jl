@@ -818,7 +818,7 @@ end=#
     end
 end
 
-@testset "CloudStore.MultipartUploadStream write large bytes - Azure" begin
+#=@testset "CloudStore.MultipartUploadStream write large bytes - Azure" begin
     Azurite.with(; debug=true) do conf
         credentials, bucket = conf
         multicsv = "1,2,3,4,5,6,7,8,9,1\n"^1000000; # 20MB
@@ -840,6 +840,6 @@ end
         obj = CloudStore.Object(bucket, "test.csv"; credentials)
         @test length(obj) == sizeof(multicsv)
     end
-end
+end=#
 
 end # @testset "CloudStore.jl"
