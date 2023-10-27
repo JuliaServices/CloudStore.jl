@@ -52,8 +52,10 @@ function API.uploadPart(x::Bucket, url, part, partNumber, uploadId; kw...)
 end
 
 function API.completeMultipartUpload(x::Bucket, url, eTags, uploadId; kw...)
+    @show "complete multipart upload"
     body = XMLDict.node_xml("CompleteMultipartUpload", Dict("Part" => [Dict("PartNumber" => string(i), "ETag" => eTag) for (i, eTag) in enumerate(eTags)]))
     resp = AWS.post(url; query=Dict("uploadId" => uploadId), body, service="s3", kw...)
+    @show "after complete upload"
     return API.etag(HTTP.header(resp, "ETag"))
 end
 

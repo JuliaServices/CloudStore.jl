@@ -388,7 +388,7 @@ function _upload_task(io, lk; kw...)
         # atomically increment our part counter
         @atomic io.cur_part_id += 1
         Base.@lock io.cond_wait begin
-            io.ntasks += 1
+            io.ntasks -= 1
             notify(io.cond_wait)
         end
     catch e
@@ -466,7 +466,7 @@ mutable struct MultipartUploadStream <: IO
             1,
             Channel{Vector{UInt8}}(Inf),
             Threads.Condition(),
-            1
+            0
         )
     end
 end
@@ -474,6 +474,7 @@ end
 function Base.write(x::MultipartUploadStream, bytes::Vector{UInt8}; kw...)
     put!(x.upload_queue, bytes)
     lk = ReentrantLock()
+    x.ntasks += 1
     Threads.@spawn _upload_task(x, lk; kw...)
     return nothing
 end
@@ -481,7 +482,9 @@ end
 function Base.close(x::MultipartUploadStream; kw...)
     Base.@lock x.cond_wait begin
         while true
-            x.sync.i == x.ntasks && break
+            if x.ntasks == 0
+                break
+            end
             wait(x.cond_wait)
         end
     end
