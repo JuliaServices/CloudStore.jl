@@ -471,7 +471,10 @@ end
 
 function Base.write(x::MultipartUploadStream, bytes::Vector{UInt8}; kw...)
     put!(x.upload_queue, bytes)
-    x.ntasks += 1
+    Base.@lock x.cond_wait begin
+        x.ntasks += 1
+        notify(x.cond_wait)
+    end
     part_n = x.cur_part_id
     Threads.@spawn _upload_task(x, part_n; kw...)
     # atomically increment our part counter
