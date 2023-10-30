@@ -390,6 +390,7 @@ function _upload_task(io, part_n; kw...)
     catch e
         isopen(io.upload_queue) && close(io.upload_queue, e)
         Base.@lock io.cond_wait begin
+            io.is_error = true
             notify(io.cond_wait, e, all=true, error=true)
         end
     end
@@ -441,6 +442,7 @@ mutable struct MultipartUploadStream <: IO
     upload_queue::Channel{Vector{UInt8}}
     cond_wait::Threads.Condition
     ntasks::Int
+    is_error::Bool
 
     function MultipartUploadStream(
         store::AbstractStore,
@@ -461,7 +463,8 @@ mutable struct MultipartUploadStream <: IO
             1,
             Channel{Vector{UInt8}}(Inf),
             Threads.Condition(),
-            0
+            0,
+            false,
         )
     end
 end
@@ -479,9 +482,7 @@ end
 function Base.close(x::MultipartUploadStream; kw...)
     Base.@lock x.cond_wait begin
         while true
-            if x.ntasks == 0
-                break
-            end
+            x.ntasks == 0 && !x.is_error && break
             wait(x.cond_wait)
         end
     end

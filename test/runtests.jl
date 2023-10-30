@@ -805,7 +805,6 @@ end=#
         while i < sizeof(multicsv)
             nb = i + N > length(multicsv) ? length(multicsv)-i+1 : N
             buf = Vector{UInt8}(undef, nb)
-            @show typeof(codeunits(multicsv))
             copyto!(buf, 1, codeunits(multicsv), i, nb)
             @test view(buf, 1:nb) == view(codeunits(multicsv), i:i+nb-1)
             CloudStore.write(mus_obj, buf;)
