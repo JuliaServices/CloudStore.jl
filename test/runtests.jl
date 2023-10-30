@@ -43,7 +43,7 @@ check(x::IO, y::AbstractVector{UInt8}) = begin; reset!(x); z = read(x) == y; res
 check(x, y) = begin; reset!(x); reset!(y); z = read(x) == read(y); reset!(x); reset!(y); z end
 
 @testset "CloudStore.jl" begin
-#=@testset "S3" begin
+@testset "S3" begin
     # conf, p = Minio.run(; debug=true)
     Minio.with(; debug=true) do conf
         credentials, bucket = conf
@@ -134,9 +134,9 @@ check(x, y) = begin; reset!(x); reset!(y); z = read(x) == read(y); reset!(x); re
             end
         end
     end
-end=#
+end
 
-#=@time @testset "Blobs" begin
+@time @testset "Blobs" begin
     # conf, p = Azurite.run(; debug=true)
     Azurite.with(; debug=true) do conf
         credentials, container = conf
@@ -791,7 +791,7 @@ end
         @test buf == view(codeunits(multicsv), 1:N)
         @test read(ioobj, UInt8) == UInt8(last(multicsv))
     end
-end=#
+end
 
 @testset "CloudStore.MultipartUploadStream write large bytes - S3" begin
     Minio.with(; debug=true) do conf
