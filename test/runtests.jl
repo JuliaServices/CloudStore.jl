@@ -369,8 +369,8 @@ end
     Minio.with(; debug=true) do conf
         credentials, bucket = conf
         multicsv = "1,2,3,4,5,6,7,8,9,1\n"^10; # 200 B
-        S3.put(bucket, "test_nantia.csv", codeunits(multicsv); credentials)
-        obj = CloudStore.Object(bucket, "test_nantia.csv"; credentials)
+        S3.put(bucket, "test.csv", codeunits(multicsv); credentials)
+        obj = CloudStore.Object(bucket, "test.csv"; credentials)
         @test length(obj) == sizeof(multicsv)
 
         N = 19
@@ -378,7 +378,7 @@ end
         copyto!(buf, 1, obj, 1, N)
         @test buf == view(codeunits(multicsv), 1:N)
 
-        ioobj = CloudStore.PrefetchedDownloadStream(bucket, "test_nantia.csv", 16; credentials)
+        ioobj = CloudStore.PrefetchedDownloadStream(bucket, "test.csv", 16; credentials)
         i = 1
         while i < sizeof(multicsv)
             nb = i + N > length(multicsv) ? length(multicsv) - i : N
