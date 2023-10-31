@@ -437,7 +437,11 @@ mutable struct MultipartUploadStream <: IO
     uploadState
     sync::OrderedSynchronizer
     eTags::Vector{String}
+@static if VERSION < v"1.7"
+    cur_part_id::Threads.Atomic{Bool}
+else
     @atomic cur_part_id::Int
+end
     upload_queue::Channel{Vector{UInt8}}
     cond_wait::Threads.Condition
     ntasks::Int
@@ -477,7 +481,11 @@ function Base.write(x::MultipartUploadStream, bytes::Vector{UInt8}; kw...)
     part_n = x.cur_part_id
     Threads.@spawn _upload_task(x, part_n; kw...)
     # atomically increment our part counter
-    @atomic x.cur_part_id += 1
+    @static if VERSION < v"1.7"
+        x.cur_part_id += 1
+    else
+        @atomic x.cur_part_id += 1
+    end
     return nothing
 end
 
