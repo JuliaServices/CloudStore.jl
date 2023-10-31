@@ -449,20 +449,38 @@ end
     )
         url = makeURL(store, key)
         uploadState = API.startMultipartUpload(store, key; credentials, kw...)
-        return new(
-            store,
-            key,
-            url,
-            credentials,
-            uploadState,
-            OrderedSynchronizer(1),
-            Vector{String}(),
-            1,
-            Channel{Vector{UInt8}}(Inf),
-            Threads.Condition(),
-            0,
-            false,
-        )
+        @static if VERSION < v"1.7"
+            io = new(
+                store,
+                key,
+                url,
+                credentials,
+                uploadState,
+                OrderedSynchronizer(1),
+                Vector{String}(),
+                Threads.Atomic{Bool}(1),
+                Channel{Vector{UInt8}}(Inf),
+                Threads.Condition(),
+                0,
+                false,
+            )
+        else
+            io = new(
+                store,
+                key,
+                url,
+                credentials,
+                uploadState,
+                OrderedSynchronizer(1),
+                Vector{String}(),
+                1,
+                Channel{Vector{UInt8}}(Inf),
+                Threads.Condition(),
+                0,
+                false,
+            )
+        end
+        return io
     end
 end
 
