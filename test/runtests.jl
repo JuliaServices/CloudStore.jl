@@ -793,6 +793,9 @@ end
     end
 end
 
+# When using Minio, the minimum upload size per part is 5MB according to
+# S3 specifications: https://github.com/minio/minio/issues/11076
+# I couldn't find a minimum upload size for Azure blob storage.
 @testset "CloudStore.MultipartUploadStream write large bytes - S3" begin
     Minio.with(; debug=true) do conf
         credentials, bucket = conf
