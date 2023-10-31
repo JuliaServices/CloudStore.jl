@@ -458,7 +458,7 @@ end
                 uploadState,
                 OrderedSynchronizer(1),
                 Vector{String}(),
-                Threads.Atomic{Bool}(1),
+                Threads.Atomic{Int}(1),
                 Channel{Vector{UInt8}}(Inf),
                 Threads.Condition(),
                 0,
