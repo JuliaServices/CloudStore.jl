@@ -494,7 +494,7 @@ function Base.write(io::MultipartUploadStream, bytes::Vector{UInt8}; kw...)
     Threads.@spawn _upload_task(io, part_n; kw...)
     # atomically increment our part counter
     @static if VERSION < v"1.7"
-        io.cur_part_id[] += 1
+        Threads.atomic_add!(io.cur_part_id, 1)
     else
         @atomic io.cur_part_id += 1
     end
