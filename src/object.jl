@@ -106,6 +106,7 @@ function _prefetching_task(io)
             download_buffer, download_buffer_next = download_buffer_next, download_buffer
         end
     catch e
+        @show "This path is exercised in tests!"
         isopen(io.download_queue) && close(io.download_queue, e)
         isopen(io.prefetch_queue) && close(io.prefetch_queue, e)
         rethrow()
@@ -373,9 +374,9 @@ function Base.read(io::PrefetchedDownloadStream, ::Type{UInt8})
     return b
 end
 
-function _upload_task(io, part_n; kw...)
+function _upload_task(io; kw...)
     try
-        upload_buffer = take!(io.upload_queue)
+        (part_n, upload_buffer) = take!(io.upload_queue)
         # upload the part
         parteTag, wb = uploadPart(io.store, io.url, upload_buffer, part_n, io.uploadState; io.credentials, kw...)
         # add part eTag to our collection of eTags in the right order
@@ -429,15 +430,11 @@ mutable struct MultipartUploadStream <: IO
     url::String
     credentials::Union{Nothing, AWS.Credentials, Azure.Credentials}
     uploadState
-    sync::OrderedSynchronizer
     eTags::Vector{String}
-@static if VERSION < v"1.7"
-    cur_part_id::Threads.Atomic{Int}
-else
-    @atomic cur_part_id::Int
-end
-    upload_queue::Channel{Vector{UInt8}}
+    upload_queue::Channel{Tuple{Int, Vector{UInt8}}}
+    sync::OrderedSynchronizer
     cond_wait::Threads.Condition
+    cur_part_id::Int
     ntasks::Int
     is_error::Bool
 
@@ -449,65 +446,44 @@ end
     )
         url = makeURL(store, key)
         uploadState = API.startMultipartUpload(store, key; credentials, kw...)
-        @static if VERSION < v"1.7"
-            io = new(
-                store,
-                key,
-                url,
-                credentials,
-                uploadState,
-                OrderedSynchronizer(1),
-                Vector{String}(),
-                Threads.Atomic{Int}(1),
-                Channel{Vector{UInt8}}(Inf),
-                Threads.Condition(),
-                0,
-                false,
-            )
-        else
-            io = new(
-                store,
-                key,
-                url,
-                credentials,
-                uploadState,
-                OrderedSynchronizer(1),
-                Vector{String}(),
-                1,
-                Channel{Vector{UInt8}}(Inf),
-                Threads.Condition(),
-                0,
-                false,
-            )
-        end
+        io = new(
+            store,
+            key,
+            url,
+            credentials,
+            uploadState,
+            Vector{String}(),
+            Channel{Tuple{Int, Vector{UInt8}}}(Inf),
+            OrderedSynchronizer(1),
+            Threads.Condition(),
+            0,
+            0,
+            false,
+        )
         return io
     end
 end
 
 function Base.write(io::MultipartUploadStream, bytes::Vector{UInt8}; kw...)
-    put!(io.upload_queue, bytes)
+    local part_n
     Base.@lock io.cond_wait begin
         io.ntasks += 1
+        io.cur_part_id += 1
+        part_n = io.cur_part_id
         notify(io.cond_wait)
     end
-    part_n = io.cur_part_id
-    Threads.@spawn _upload_task(io, part_n; kw...)
-    # atomically increment our part counter
-    @static if VERSION < v"1.7"
-        Threads.atomic_add!(io.cur_part_id, 1)
-    else
-        @atomic io.cur_part_id += 1
-    end
+    put!(io.upload_queue, (part_n, bytes))
+    Threads.@spawn _upload_task($io; $(kw)...)
     return nothing
 end
 
 function Base.close(io::MultipartUploadStream; kw...)
+    close(io.upload_queue)
     Base.@lock io.cond_wait begin
         while true
             io.ntasks == 0 && !io.is_error && break
             wait(io.cond_wait)
         end
     end
-    close(io.upload_queue)
     return API.completeMultipartUpload(io.store, io.url, io.eTags, io.uploadState; kw...)
 end
