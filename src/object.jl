@@ -106,7 +106,6 @@ function _prefetching_task(io)
             download_buffer, download_buffer_next = download_buffer_next, download_buffer
         end
     catch e
-        @show "This path is exercised in tests!"
         isopen(io.download_queue) && close(io.download_queue, e)
         isopen(io.prefetch_queue) && close(io.prefetch_queue, e)
         rethrow()
