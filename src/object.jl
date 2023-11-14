@@ -475,9 +475,9 @@ function Base.write(io::MultipartUploadStream, bytes::Vector{UInt8}; kw...)
         part_n = io.cur_part_id
         notify(io.cond_wait)
     end
-    Base.acquire(io.sem) do
-        put!(io.upload_queue, (part_n, bytes))
-    end
+    Base.acquire(io.sem)
+    put!(io.upload_queue, (part_n, bytes))
+    Base.release(io.sem)
     Threads.@spawn _upload_task($io; $(kw)...)
     return nothing
 end
