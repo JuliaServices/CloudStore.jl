@@ -390,6 +390,7 @@ function _upload_task(io; kw...)
         isopen(io.upload_queue) && close(io.upload_queue, e)
         Base.@lock io.cond_wait begin
             io.is_error = true
+            io.exc = e
             notify(io.cond_wait, e, all=true, error=true)
         end
     end
@@ -425,7 +426,6 @@ io = MultipartUploadStream(bucket, "test.csv"; credentials)
 """
 mutable struct MultipartUploadStream <: IO
     store::AbstractStore
-    key::String
     url::String
     credentials::Union{Nothing, AWS.Credentials, Azure.Credentials}
     uploadState
@@ -436,18 +436,20 @@ mutable struct MultipartUploadStream <: IO
     cur_part_id::Int
     ntasks::Int
     is_error::Bool
+    exc::Union{Exception, Nothing}
+    sem::Base.Semaphore
 
     function MultipartUploadStream(
         store::AbstractStore,
         key::String;
         credentials::Union{CloudCredentials, Nothing}=nothing,
+        concurrent_writes_to_channel::Int=(4 * Threads.nthreads()),
         kw...
     )
         url = makeURL(store, key)
         uploadState = API.startMultipartUpload(store, key; credentials, kw...)
         io = new(
             store,
-            key,
             url,
             credentials,
             uploadState,
@@ -458,6 +460,8 @@ mutable struct MultipartUploadStream <: IO
             0,
             0,
             false,
+            nothing,
+            Base.Semaphore(concurrent_writes_to_channel)
         )
         return io
     end
@@ -471,18 +475,32 @@ function Base.write(io::MultipartUploadStream, bytes::Vector{UInt8}; kw...)
         part_n = io.cur_part_id
         notify(io.cond_wait)
     end
-    put!(io.upload_queue, (part_n, bytes))
+    Base.acquire(io.sem) do
+        put!(io.upload_queue, (part_n, bytes))
+    end
     Threads.@spawn _upload_task($io; $(kw)...)
     return nothing
 end
 
+function Base.wait(io::MultipartUploadStream)
+    try
+        Base.@lock io.cond_wait begin
+            while true
+                io.ntasks == 0 && !io.is_error && break
+                if io.is_error
+                    throw(io.exc)
+                    break
+                end
+                wait(io.cond_wait)
+            end
+        end
+    catch e
+        rethrow()
+    end
+end
+
+
 function Base.close(io::MultipartUploadStream; kw...)
     close(io.upload_queue)
-    Base.@lock io.cond_wait begin
-        while true
-            io.ntasks == 0 && !io.is_error && break
-            wait(io.cond_wait)
-        end
-    end
     return API.completeMultipartUpload(io.store, io.url, io.eTags, io.uploadState; kw...)
 end

@@ -799,7 +799,6 @@ end
 @testset "CloudStore.MultipartUploadStream write large bytes - S3" begin
     Minio.with(; debug=true) do conf
         credentials, bucket = conf
-        @show bucket
         multicsv = "1,2,3,4,5,6,7,8,9,1\n"^1000000; # 20MB
 
         N = 5500000
@@ -815,6 +814,7 @@ end
             i += N
         end
 
+        CloudStore.wait(mus_obj)
         CloudStore.close(mus_obj; credentials)
         obj = CloudStore.Object(bucket, "test.csv"; credentials)
         @test length(obj) == sizeof(multicsv)
@@ -839,6 +839,7 @@ end
             i += N
         end
 
+        CloudStore.wait(mus_obj)
         CloudStore.close(mus_obj; credentials)
         obj = CloudStore.Object(bucket, "test.csv"; credentials)
         @test length(obj) == sizeof(multicsv)
