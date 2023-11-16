@@ -399,17 +399,17 @@ function _upload_task(io; kw...)
 end
 
 """
+This is an *experimental* API.
+
     MultipartUploadStream <: IO
     MultipartUploadStream(args...; kwargs...) -> MultipartUploadStream
 
-An in-memory IO stream that uploads chunks to a URL in blob storage.
+ An in-memory IO stream that uploads chunks to a URL in blob storage.
 
-Data chunks are written to a channel and spawned tasks read buffers from this channel.
+For every data chunk we call write(io, data;) to write it to a channel. We spawn one task
+per chunk to read data from this channel and uploads it as a distinct part to blob storage
+to the same remote object.
 We expect the chunks to be written in order.
-Each task uploads a distinct part to blob storage.
-Each part is tagged with an id and we keep the tags into a vector. We also increment a
-counter to keep track of the number of parts. When there are no more data chunks to upload,
-we send a POST request with a single id for the entire upload.
 
 # Arguments
 * `store::AbstractStore`: The S3 Bucket / Azure Container object
@@ -418,21 +418,36 @@ we send a POST request with a single id for the entire upload.
 # Keywords
 * `credentials::Union{CloudCredentials, Nothing}=nothing`: Credentials object used in HTTP
     requests
-* `concurrent_writes_to_channel::Int=(4 * Threads.nthreads())`: The number of concurrent
-    writes to the channel. Defaults to 4 times the number of threads. We use this value to
+* `concurrent_writes_to_channel::Int=(4 * Threads.nthreads())`: represents the max number of
+    chunks in flight. Defaults to 4 times the number of threads. We use this value to
     initialize a semaphore to perform throttling in case the writing to the channel is much
-    faster to uploading to blob storage.
+    faster to uploading to blob storage, i.e. `write` will block as a result of this limit
+    being reached.
 * `kwargs...`: HTTP keyword arguments are forwarded to underlying HTTP requests,
 
 ## Examples
 ```
 # Get an IO stream for a remote CSV file `test.csv` living in your S3 bucket
 io = MultipartUploadStream(bucket, "test.csv"; credentials)
+
+# Write a chunk of data (Vector{UInt8}) to the stream
+write(io, data;)
+
+# Wait for all chunks to be uploaded
+wait(io)
+
+# Close the stream
+close(io; credentials)
+
+# Alternative syntax that encapsulates all these steps
+MultipartUploadStream(bucket, "test.csv"; credentials) do io
+    write(io, data;)
+end
 ```
 
 ## Performance
 ```
-We have benchmarked the performance of MultipartUploadStream for smaller (~39MB) and larger
+We have benchmarked the performance of `MultipartUploadStream` for smaller (~39MB) and larger
 files up to ~860MB. For smaller files the performance is similar to an S3.put call, whereas
 for larger ones we do see a degradation of about 18% after ~300MB, that is growing more as
 the size of the uploaded file grows. We need to investirage further the cause of this.
@@ -467,7 +482,7 @@ mutable struct MultipartUploadStream{T <: AbstractStore} <: IO
         credentials::Union{Nothing, AWS.Credentials}=nothing,
         concurrent_writes_to_channel::Int=(4 * Threads.nthreads()),
         kw...
-    ) where {T<:AbstractStore}
+    )
         url = makeURL(store, key)
         uploadState = API.startMultipartUpload(store, key; credentials, kw...)
         io = new{AWS.Bucket}(
@@ -528,6 +543,7 @@ mutable struct MultipartUploadStream{T <: AbstractStore} <: IO
     end
 end
 
+# Writes a data chunk to the channel and spawn
 function Base.write(io::MultipartUploadStream, bytes::Vector{UInt8}; kw...)
     local part_n
     Base.@lock io.cond_wait begin
@@ -543,6 +559,7 @@ function Base.write(io::MultipartUploadStream, bytes::Vector{UInt8}; kw...)
     return nothing
 end
 
+# Waits for all parts to be uploaded
 function Base.wait(io::MultipartUploadStream)
     try
         Base.@lock io.cond_wait begin
@@ -557,7 +574,8 @@ function Base.wait(io::MultipartUploadStream)
     end
 end
 
-
+# When there are no more data chunks to upload, this function closes the channel and sends
+# a POST request with a single id for the entire upload.
 function Base.close(io::MultipartUploadStream; kw...)
     try
         close(io.upload_queue)
