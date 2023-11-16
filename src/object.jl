@@ -508,6 +508,11 @@ end
 
 
 function Base.close(io::MultipartUploadStream; kw...)
-    close(io.upload_queue)
-    return API.completeMultipartUpload(io.store, io.url, io.eTags, io.uploadState; kw...)
+    try
+        close(io.upload_queue)
+        return API.completeMultipartUpload(io.store, io.url, io.eTags, io.uploadState; kw...)
+    catch e
+        io.exc = e
+        rethrow()
+    end
 end

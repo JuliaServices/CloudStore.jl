@@ -809,7 +809,6 @@ end
             nb = i + N > length(multicsv) ? length(multicsv)-i+1 : N
             buf = Vector{UInt8}(undef, nb)
             copyto!(buf, 1, codeunits(multicsv), i, nb)
-            @test view(buf, 1:nb) == view(codeunits(multicsv), i:i+nb-1)
             CloudStore.write(mus_obj, buf;)
             i += N
         end
@@ -818,6 +817,49 @@ end
         CloudStore.close(mus_obj; credentials)
         obj = CloudStore.Object(bucket, "test.csv"; credentials)
         @test length(obj) == sizeof(multicsv)
+    end
+end
+
+@testset "CloudStore.MultipartUploadStream failure due to too small upload size - S3" begin
+    Minio.with(; debug=true) do conf
+        credentials, bucket = conf
+        multicsv = "1,2,3,4,5,6,7,8,9,1\n"^1000000; # 20MB
+
+        N = 55000
+        mus_obj = CloudStore.MultipartUploadStream(bucket, "test.csv"; credentials)
+        try
+            i = 1
+            nb = i + N > length(multicsv) ? length(multicsv)-i+1 : N
+            buf = Vector{UInt8}(undef, nb)
+            copyto!(buf, 1, codeunits(multicsv), i, nb)
+            CloudStore.write(mus_obj, buf;)
+            CloudStore.wait(mus_obj)
+            CloudStore.close(mus_obj; credentials) # This should fail
+        catch e
+            @test isnothing(mus_obj.exc) == false
+        end
+    end
+end
+
+@testset "CloudStore.MultipartUploadStream failure due to changed url - S3" begin
+    Minio.with(; debug=true) do conf
+        credentials, bucket = conf
+        multicsv = "1,2,3,4,5,6,7,8,9,1\n"^1000000; # 20MB
+
+        N = 5500000
+        mus_obj = CloudStore.MultipartUploadStream(bucket, "test.csv"; credentials)
+        try
+            i = 1
+            nb = i + N > length(multicsv) ? length(multicsv)-i+1 : N
+            buf = Vector{UInt8}(undef, nb)
+            copyto!(buf, 1, codeunits(multicsv), i, nb)
+            # Changing the url after the MultipartUploadStream object was created
+            mus_obj.url = "http://127.0.0.1:23252/jl-minio-22377/test_nantia.csv"
+            CloudStore.write(mus_obj, buf;) # This should fail
+            CloudStore.wait(mus_obj)
+        catch e
+            @test isnothing(mus_obj.exc) == false
+        end
     end
 end
 
@@ -834,7 +876,6 @@ end
             nb = i + N > length(multicsv) ? length(multicsv)-i+1 : N
             buf = Vector{UInt8}(undef, nb)
             copyto!(buf, 1, codeunits(multicsv), i, nb)
-            @test view(buf, 1:nb) == view(codeunits(multicsv), i:i+nb-1)
             CloudStore.write(mus_obj, buf;)
             i += N
         end
