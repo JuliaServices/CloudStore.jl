@@ -793,5 +793,124 @@ end
     end
 end
 
+# When using Minio, the minimum upload size per part is 5MB according to
+# S3 specifications: https://github.com/minio/minio/issues/11076
+# I couldn't find a minimum upload size for Azure blob storage.
+@testset "CloudStore.MultipartUploadStream write large bytes - S3" begin
+    Minio.with(; debug=true) do conf
+        credentials, bucket = conf
+        multicsv = "1,2,3,4,5,6,7,8,9,1\n"^1000000; # 20MB
+
+        N = 5500000
+        mus_obj = CloudStore.MultipartUploadStream(bucket, "test.csv"; credentials)
+
+        i = 1
+        while i < sizeof(multicsv)
+            nb = i + N > length(multicsv) ? length(multicsv)-i+1 : N
+            buf = Vector{UInt8}(undef, nb)
+            copyto!(buf, 1, codeunits(multicsv), i, nb)
+            CloudStore.write(mus_obj, buf;)
+            i += N
+        end
+
+        CloudStore.wait(mus_obj)
+        CloudStore.close(mus_obj; credentials)
+        obj = CloudStore.Object(bucket, "test.csv"; credentials)
+        @test length(obj) == sizeof(multicsv)
+    end
+end
+
+@testset "CloudStore.MultipartUploadStream failure due to too small upload size - S3" begin
+    Minio.with(; debug=true) do conf
+        credentials, bucket = conf
+        multicsv = "1,2,3,4,5,6,7,8,9,1\n"^1000000; # 20MB
+
+        N = 55000
+        mus_obj = CloudStore.MultipartUploadStream(bucket, "test.csv"; credentials)
+        try
+            i = 1
+            nb = i + N > length(multicsv) ? length(multicsv)-i+1 : N
+            buf = Vector{UInt8}(undef, nb)
+            copyto!(buf, 1, codeunits(multicsv), i, nb)
+            CloudStore.write(mus_obj, buf;)
+            CloudStore.wait(mus_obj)
+            CloudStore.close(mus_obj; credentials) # This should fail
+        catch e
+            @test isnothing(mus_obj.exc) == false
+        end
+    end
+end
+
+@testset "CloudStore.MultipartUploadStream failure due to changed url - S3" begin
+    Minio.with(; debug=true) do conf
+        credentials, bucket = conf
+        multicsv = "1,2,3,4,5,6,7,8,9,1\n"^1000000; # 20MB
+
+        N = 5500000
+        mus_obj = CloudStore.MultipartUploadStream(bucket, "test.csv"; credentials)
+        try
+            i = 1
+            nb = i + N > length(multicsv) ? length(multicsv)-i+1 : N
+            buf = Vector{UInt8}(undef, nb)
+            copyto!(buf, 1, codeunits(multicsv), i, nb)
+            # Changing the url after the MultipartUploadStream object was created
+            mus_obj.url = "http://127.0.0.1:23252/jl-minio-22377/test_nantia.csv"
+            CloudStore.write(mus_obj, buf;) # This should fail
+            CloudStore.wait(mus_obj)
+        catch e
+            @test isnothing(mus_obj.exc) == false
+        end
+    end
+end
+
+@testset "CloudStore.MultipartUploadStream write large bytes - Azure" begin
+    Azurite.with(; debug=true) do conf
+        credentials, bucket = conf
+        multicsv = "1,2,3,4,5,6,7,8,9,1\n"^1000000; # 20MB
+
+        N = 2000000
+        mus_obj = CloudStore.MultipartUploadStream(bucket, "test.csv"; credentials)
+
+        i = 1
+        while i < sizeof(multicsv)
+            nb = i + N > length(multicsv) ? length(multicsv)-i+1 : N
+            buf = Vector{UInt8}(undef, nb)
+            copyto!(buf, 1, codeunits(multicsv), i, nb)
+            CloudStore.write(mus_obj, buf;)
+            i += N
+        end
+
+        CloudStore.wait(mus_obj)
+        CloudStore.close(mus_obj; credentials)
+        obj = CloudStore.Object(bucket, "test.csv"; credentials)
+        @test length(obj) == sizeof(multicsv)
+    end
+end
+
+@testset "CloudStore.MultipartUploadStream test alternative syntax - Azure" begin
+    Azurite.with(; debug=true) do conf
+        credentials, bucket = conf
+        multicsv = "1,2,3,4,5,6,7,8,9,1\n"^1000000; # 20MB
+
+        N = 2000000
+        function uploading_loop(multicsv, batch_size, mus_obj)
+            i = 1
+            while i < sizeof(multicsv)
+                nb = i + batch_size > length(multicsv) ? length(multicsv)-i+1 : batch_size
+                buf = Vector{UInt8}(undef, nb)
+                copyto!(buf, 1, codeunits(multicsv), i, nb)
+                CloudStore.write(mus_obj, buf;)
+                i += batch_size
+            end
+        end
+
+       CloudStore.MultipartUploadStream(bucket, "test.csv"; credentials) do mus_obj
+            uploading_loop(multicsv, N, mus_obj)
+        end
+
+        obj = CloudStore.Object(bucket, "test.csv"; credentials)
+        @test length(obj) == sizeof(multicsv)
+    end
+end
 
 end # @testset "CloudStore.jl"
