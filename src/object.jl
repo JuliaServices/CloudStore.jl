@@ -378,18 +378,18 @@ function _upload_task(io; kw...)
         (part_n, upload_buffer) = take!(io.upload_queue)
         # upload the part
         parteTag, wb = uploadPart(io.store, io.url, upload_buffer, part_n, io.uploadState; io.credentials, kw...)
-        # add part eTag to our collection of eTags in the right order
-        put!(io.sync, part_n) do
-            push!(io.eTags, parteTag)
-        end
+        # add part eTag to our collection of eTags
         Base.@lock io.cond_wait begin
+            if length(io.eTags) < part_n
+                resize!(io.eTags, part_n)
+            end
+            io.eTags[part_n] = parteTag
             io.ntasks -= 1
             notify(io.cond_wait)
         end
     catch e
         isopen(io.upload_queue) && close(io.upload_queue, e)
         Base.@lock io.cond_wait begin
-            io.is_error = true
             io.exc = e
             notify(io.cond_wait, e, all=true, error=true)
         end
@@ -404,6 +404,7 @@ end
 An in-memory IO stream that uploads chunks to a URL in blob storage.
 
 Data chunks are written to a channel and spawned tasks read buffers from this channel.
+We expect the chunks to be written in order.
 Each task uploads a distinct part to blob storage.
 Each part is tagged with an id and we keep the tags into a vector. We also increment a
 counter to keep track of the number of parts. When there are no more data chunks to upload,
@@ -416,6 +417,10 @@ we send a POST request with a single id for the entire upload.
 # Keywords
 * `credentials::Union{CloudCredentials, Nothing}=nothing`: Credentials object used in HTTP
     requests
+* `concurrent_writes_to_channel::Int=(4 * Threads.nthreads())`: The number of concurrent
+    writes to the channel. Defaults to 4 times the number of threads. We use this value to
+    initialize a semaphore to perform throttling in case the writing to the channel is much
+    faster to uploading to blob storage.
 * `kwargs...`: HTTP keyword arguments are forwarded to underlying HTTP requests,
 
 ## Examples
@@ -423,43 +428,47 @@ we send a POST request with a single id for the entire upload.
 # Get an IO stream for a remote CSV file `test.csv` living in your S3 bucket
 io = MultipartUploadStream(bucket, "test.csv"; credentials)
 ```
+
+## Performance
+We have benchmarked the performance of MultipartUploadStream for smaller (~39MB) and larger
+files up to ~860MB. For smaller files the performance is similar to an S3.put call, whereas
+for larger ones we do see a degradation of about 18% after ~300MB, that is growing more as
+the size of the uploaded file grows. We need to investirage further the cause of this.
+Some benchmark results can be found in https://github.com/JuliaServices/CloudStore.jl/pull/46#issuecomment-1804298709
+and https://github.com/JuliaServices/CloudStore.jl/pull/46#issuecomment-1810558208.
 """
-mutable struct MultipartUploadStream <: IO
-    store::AbstractStore
+mutable struct MultipartUploadStream{T <: AbstractStore} <: IO
+    store::T
     url::String
     credentials::Union{Nothing, AWS.Credentials, Azure.Credentials}
-    uploadState
+    uploadState::Union{String, Nothing}
     eTags::Vector{String}
     upload_queue::Channel{Tuple{Int, Vector{UInt8}}}
-    sync::OrderedSynchronizer
     cond_wait::Threads.Condition
     cur_part_id::Int
     ntasks::Int
-    is_error::Bool
     exc::Union{Exception, Nothing}
     sem::Base.Semaphore
 
     function MultipartUploadStream(
-        store::AbstractStore,
+        store::T,
         key::String;
         credentials::Union{CloudCredentials, Nothing}=nothing,
         concurrent_writes_to_channel::Int=(4 * Threads.nthreads()),
         kw...
-    )
+    ) where {T<:AbstractStore}
         url = makeURL(store, key)
         uploadState = API.startMultipartUpload(store, key; credentials, kw...)
-        io = new(
+        io = new{T}(
             store,
             url,
             credentials,
             uploadState,
             Vector{String}(),
             Channel{Tuple{Int, Vector{UInt8}}}(Inf),
-            OrderedSynchronizer(1),
             Threads.Condition(),
             0,
             0,
-            false,
             nothing,
             Base.Semaphore(concurrent_writes_to_channel)
         )
@@ -476,6 +485,7 @@ function Base.write(io::MultipartUploadStream, bytes::Vector{UInt8}; kw...)
         notify(io.cond_wait)
     end
     Base.acquire(io.sem)
+    # We expect the data chunks to be written in order in the channel.
     put!(io.upload_queue, (part_n, bytes))
     Base.release(io.sem)
     Threads.@spawn _upload_task($io; $(kw)...)
@@ -486,11 +496,8 @@ function Base.wait(io::MultipartUploadStream)
     try
         Base.@lock io.cond_wait begin
             while true
-                io.ntasks == 0 && !io.is_error && break
-                if io.is_error
-                    throw(io.exc)
-                    break
-                end
+                !isnothing(io.exc) && throw(io.exc)
+                io.ntasks == 0 && break
                 wait(io.cond_wait)
             end
         end
