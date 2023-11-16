@@ -410,6 +410,8 @@ For every data chunk we call write(io, data;) to write it to a channel. We spawn
 per chunk to read data from this channel and uploads it as a distinct part to blob storage
 to the same remote object.
 We expect the chunks to be written in order.
+For cases where there is no need to upload data in parts or the data size is too small, `put`
+can be used instead.
 
 # Arguments
 * `store::AbstractStore`: The S3 Bucket / Azure Container object
@@ -445,22 +447,13 @@ MultipartUploadStream(bucket, "test.csv"; credentials) do io
 end
 ```
 
-## Performance
-```
-We have benchmarked the performance of `MultipartUploadStream` for smaller (~39MB) and larger
-files up to ~860MB. For smaller files the performance is similar to an S3.put call, whereas
-for larger ones we do see a degradation of about 18% after ~300MB, that is growing more as
-the size of the uploaded file grows. We need to investirage further the cause of this.
-Some benchmark results can be found in https://github.com/JuliaServices/CloudStore.jl/pull/46#issuecomment-1804298709
-and https://github.com/JuliaServices/CloudStore.jl/pull/46#issuecomment-1810558208.
-```
-
 ## Note on upload size
 ```
 Some cloud storage providers might have a lower limit on the size of the uploaded object.
 For example it seems that S3 requires at minimum an upload of 5MB:
 https://github.com/minio/minio/issues/11076.
 We haven't found a similar setting for Azure.
+For such cases where the size of the data is too small, one can use `put`
 ```
 """
 mutable struct MultipartUploadStream{T <: AbstractStore} <: IO
