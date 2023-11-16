@@ -378,6 +378,7 @@ function _upload_task(io; kw...)
         (part_n, upload_buffer) = take!(io.upload_queue)
         # upload the part
         parteTag, wb = uploadPart(io.store, io.url, upload_buffer, part_n, io.uploadState; io.credentials, kw...)
+        Base.release(io.sem)
         # add part eTag to our collection of eTags
         Base.@lock io.cond_wait begin
             if length(io.eTags) < part_n
@@ -430,12 +431,22 @@ io = MultipartUploadStream(bucket, "test.csv"; credentials)
 ```
 
 ## Performance
+```
 We have benchmarked the performance of MultipartUploadStream for smaller (~39MB) and larger
 files up to ~860MB. For smaller files the performance is similar to an S3.put call, whereas
 for larger ones we do see a degradation of about 18% after ~300MB, that is growing more as
 the size of the uploaded file grows. We need to investirage further the cause of this.
 Some benchmark results can be found in https://github.com/JuliaServices/CloudStore.jl/pull/46#issuecomment-1804298709
 and https://github.com/JuliaServices/CloudStore.jl/pull/46#issuecomment-1810558208.
+```
+
+## Note on upload size
+```
+Some cloud storage providers might have a lower limit on the size of the uploaded object.
+For example it seems that S3 requires at minimum an upload of 5MB:
+https://github.com/minio/minio/issues/11076.
+We haven't found a similar setting for Azure.
+```
 """
 mutable struct MultipartUploadStream{T <: AbstractStore} <: IO
     store::T
@@ -474,6 +485,22 @@ mutable struct MultipartUploadStream{T <: AbstractStore} <: IO
         )
         return io
     end
+
+    # Alternative syntax that applies the function `f` to the result of
+    # `MultipartUploadStream(args...; kwargs...)`, waits for all parts to be uploaded and
+    # and closes the stream.
+    function MultipartUploadStream(f::Function, args...; kwargs...)
+        io = MultipartUploadStream(args...; kwargs...)
+        try
+            f(io)
+            wait(io)
+            close(io; kwargs...)
+        catch e
+            # todo, we need a function here to signal abort to S3/Blobs. We don't have that
+            # yet in CloudStore.jl
+            rethrow()
+        end
+    end
 end
 
 function Base.write(io::MultipartUploadStream, bytes::Vector{UInt8}; kw...)
@@ -487,7 +514,6 @@ function Base.write(io::MultipartUploadStream, bytes::Vector{UInt8}; kw...)
     Base.acquire(io.sem)
     # We expect the data chunks to be written in order in the channel.
     put!(io.upload_queue, (part_n, bytes))
-    Base.release(io.sem)
     Threads.@spawn _upload_task($io; $(kw)...)
     return nothing
 end

@@ -887,4 +887,30 @@ end
     end
 end
 
+@testset "CloudStore.MultipartUploadStream test alternative syntax - Azure" begin
+    Azurite.with(; debug=true) do conf
+        credentials, bucket = conf
+        multicsv = "1,2,3,4,5,6,7,8,9,1\n"^1000000; # 20MB
+
+        N = 2000000
+        function uploading_loop(multicsv, batch_size, mus_obj)
+            i = 1
+            while i < sizeof(multicsv)
+                nb = i + batch_size > length(multicsv) ? length(multicsv)-i+1 : batch_size
+                buf = Vector{UInt8}(undef, nb)
+                copyto!(buf, 1, codeunits(multicsv), i, nb)
+                CloudStore.write(mus_obj, buf;)
+                i += batch_size
+            end
+        end
+
+       CloudStore.MultipartUploadStream(bucket, "test.csv"; credentials) do mus_obj
+            uploading_loop(multicsv, N, mus_obj)
+        end
+
+        obj = CloudStore.Object(bucket, "test.csv"; credentials)
+        @test length(obj) == sizeof(multicsv)
+    end
+end
+
 end # @testset "CloudStore.jl"
