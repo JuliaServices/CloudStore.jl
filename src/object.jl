@@ -462,15 +462,40 @@ mutable struct MultipartUploadStream{T <: AbstractStore} <: IO
     sem::Base.Semaphore
 
     function MultipartUploadStream(
-        store::T,
+        store::AWS.Bucket,
         key::String;
-        credentials::Union{CloudCredentials, Nothing}=nothing,
+        credentials::Union{Nothing, AWS.Credentials}=nothing,
         concurrent_writes_to_channel::Int=(4 * Threads.nthreads()),
         kw...
     ) where {T<:AbstractStore}
         url = makeURL(store, key)
         uploadState = API.startMultipartUpload(store, key; credentials, kw...)
-        io = new{T}(
+        io = new{AWS.Bucket}(
+            store,
+            url,
+            credentials,
+            uploadState,
+            Vector{String}(),
+            Channel{Tuple{Int, Vector{UInt8}}}(Inf),
+            Threads.Condition(),
+            0,
+            0,
+            nothing,
+            Base.Semaphore(concurrent_writes_to_channel)
+        )
+        return io
+    end
+
+    function MultipartUploadStream(
+        store::Azure.Container,
+        key::String;
+        credentials::Union{Nothing, Azure.Credentials}=nothing,
+        concurrent_writes_to_channel::Int=(4 * Threads.nthreads()),
+        kw...
+    )
+        url = makeURL(store, key)
+        uploadState = API.startMultipartUpload(store, key; credentials, kw...)
+        io = new{Azure.Container}(
             store,
             url,
             credentials,
@@ -489,12 +514,12 @@ mutable struct MultipartUploadStream{T <: AbstractStore} <: IO
     # Alternative syntax that applies the function `f` to the result of
     # `MultipartUploadStream(args...; kwargs...)`, waits for all parts to be uploaded and
     # and closes the stream.
-    function MultipartUploadStream(f::Function, args...; kwargs...)
-        io = MultipartUploadStream(args...; kwargs...)
+    function MultipartUploadStream(f::Function, args...; kw...)
+        io = MultipartUploadStream(args...; kw...)
         try
             f(io)
             wait(io)
-            close(io; kwargs...)
+            close(io; kw...)
         catch e
             # todo, we need a function here to signal abort to S3/Blobs. We don't have that
             # yet in CloudStore.jl
