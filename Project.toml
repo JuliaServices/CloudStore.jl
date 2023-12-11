@@ -8,6 +8,7 @@ Base64 = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
 CloudBase = "85eb1798-d7c4-4918-bb13-c944d38e27ed"
 CodecZlib = "944b1d66-785c-5afd-91f1-9de20f533193"
 CodecZlibNG = "642d12eb-acb5-4437-bcfc-a25e07ad685c"
+ExceptionUnwrapping = "460bff9d-24e4-43bc-9d9f-a8973cb893f4"
 HTTP = "cd3eb016-35fb-5094-929b-558a96fad6f3"
 Mmap = "a63ad114-7e13-5084-954f-fe012c677804"
 TranscodingStreams = "3bb67fe8-82b1-5028-8e26-92a6c54297fa"
@@ -19,16 +20,19 @@ Base64 = "1"
 CloudBase = "1"
 CodecZlib = "0.7"
 CodecZlibNG = "0.1"
+ExceptionUnwrapping = "0.1"
 HTTP = "1.7"
 Mmap = "1"
 TranscodingStreams = "0.9.12"
+Sockets = "1"
 WorkerUtilities = "1.1"
 XMLDict = "0.4"
 julia = "1.6"
 
 [extras]
 CodecZlib = "944b1d66-785c-5afd-91f1-9de20f533193"
+Sockets = "6462fe0b-24de-5631-8697-dd941f90decc"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["CodecZlib", "Test"]
+test = ["CodecZlib", "Sockets", "Test"]

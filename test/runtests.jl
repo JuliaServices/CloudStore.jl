@@ -1,6 +1,9 @@
 using Test, CloudStore, CloudBase.CloudTest
 import CloudStore: S3, Blobs
 using CodecZlib
+using HTTP: ConnectError, StatusError
+using Sockets: DNSError
+using ExceptionUnwrapping: unwrap_exception
 
 bytes(x) = codeunits(x)
 
@@ -134,6 +137,119 @@ check(x, y) = begin; reset!(x); reset!(y); z = read(x) == read(y); reset!(x); re
             end
         end
     end
+
+    @testset "Exceptions" begin
+        # conf, p = Minio.run(; debug=true)
+        Minio.with(; debug=true) do conf
+            credentials, bucket = conf
+            global _stale_bucket = bucket
+            csv = "a,b,c\n1,2,3\n4,5"
+            obj = S3.put(bucket, "test.csv", bytes(csv); credentials)
+            @assert obj.size == sizeof(csv)
+
+            @testset "Insufficient output buffer size" begin
+                out = zeros(UInt8, sizeof(csv) - 1)
+                try
+                    S3.get(bucket, "test.csv", out; credentials, allowMultipart=false) # single request
+                    @test false # Should have thrown an error
+                catch e
+                    @test e isa ArgumentError
+                    @test e.msg == "Unable to grow response stream IOBuffer $(sizeof(out)) large enough for response body size: $(sizeof(csv))"
+                end
+
+                try
+                    S3.get(bucket, "test.csv", out; credentials, allowMultipart=true, multipartThreshold=1) # multipart request
+                    @test false # Should have thrown an error
+                catch e
+                    @test e isa ArgumentError
+                    @test e.msg == "out ($(sizeof(out))) must at least be of length $(sizeof(csv))"
+                end
+            end
+
+            @testset "Missing credentials" begin
+                try
+                    S3.get(bucket, "test.csv") # single request
+                    @test false # Should have thrown an error
+                catch e
+                    @test e isa StatusError
+                    @test e.status == 403
+                end
+
+                try
+                    S3.get(bucket, "test.csv"; allowMultipart=true, multipartThreshold=1) # multipart request
+                    @test false # Should have thrown an error
+                catch e
+                    @test e isa StatusError
+                    @test e.status == 403
+                end
+
+                try
+                    S3.put(bucket, "test2.csv", csv)
+                    @test false # Should have thrown an error
+                catch e
+                    @test e isa StatusError
+                    @test e.status == 403
+                end
+            end
+
+            @testset "Non-existing file" begin
+                try
+                    S3.get(bucket, "doesnt_exist.csv"; credentials, allowMultipart=false) # single request
+                    @test false # Should have thrown an error
+                catch e
+                    @test e isa StatusError
+                    @test e.status == 404
+                end
+
+                try
+                    S3.get(bucket, "doesnt_exist.csv"; credentials, allowMultipart=true, multipartThreshold=1) # multipart request
+                    @test false # Should have thrown an error
+                catch e
+                    @test e isa StatusError
+                    @test e.status == 404
+                end
+            end
+
+            @testset "Connection error: DNSError" begin
+                non_existent_bucket_name = string(bucket.name, "doesntexist")
+                non_existent_baseurl = replace(bucket.baseurl, bucket.name => non_existent_bucket_name)
+                non_existent_bucket = S3.Bucket(non_existent_bucket_name, non_existent_baseurl)
+                try
+                    S3.get(non_existent_bucket, "doesnt_exist.csv"; credentials)
+                    @test false # Should have thrown an error
+                catch e
+                    @test e isa ConnectError
+                    @test unwrap_exception(e.error) isa DNSError
+                end
+
+                try
+                    S3.put(non_existent_bucket, "doesnt_exist.csv", csv; credentials)
+                    @test false # Should have thrown an error
+                catch e
+                    @test e isa ConnectError
+                    @test unwrap_exception(e.error) isa DNSError
+                end
+            end
+        end
+        # Minio doesn't run at this point
+        @testset "Connection error: IOError" begin
+            try
+                S3.get(_stale_bucket, "doesnt_exist.csv")
+                @test false # Should have thrown an error
+            catch e
+                @test e isa ConnectError
+                @test unwrap_exception(e.error) isa Base.IOError
+            end
+
+            try
+                S3.put(_stale_bucket, "doesnt_exist.csv", "my,da,ta")
+                @test false # Should have thrown an error
+            catch e
+                @test e isa ConnectError
+                @test unwrap_exception(e.error) isa Base.IOError
+            end
+        end
+    end
 end
 
 @time @testset "Blobs" begin
@@ -232,6 +348,119 @@ end
 
                 objs = Blobs.list(container; credentials)
                 @test length(objs) == 0
+            end
+        end
+    end
+
+    @testset "Exceptions" begin
+        # conf, p = Azurite.run(; debug=true)
+        Azurite.with(; debug=true) do conf
+            credentials, container = conf
+            global _stale_container = container
+            csv = "a,b,c\n1,2,3\n4,5"
+            obj = Blobs.put(container, "test.csv", bytes(csv); credentials)
+            @assert obj.size == sizeof(csv)
+
+            @testset "Insufficient output buffer size" begin
+                out = zeros(UInt8, sizeof(csv) - 1)
+                try
+                    Blobs.get(container, "test.csv", out; credentials, allowMultipart=false) # single request
+                    @test false # Should have thrown an error
+                catch e
+                    @test e isa ArgumentError
+                    @test e.msg == "Unable to grow response stream IOBuffer $(sizeof(out)) large enough for response body size: $(sizeof(csv))"
+                end
+
+                try
+                    Blobs.get(container, "test.csv", out; credentials, allowMultipart=true, multipartThreshold=1) # multipart request
+                    @test false # Should have thrown an error
+                catch e
+                    @test e isa ArgumentError
+                    @test e.msg == "out ($(sizeof(out))) must at least be of length $(sizeof(csv))"
+                end
+            end
+
+            @testset "Missing credentials" begin
+                try
+                    Blobs.get(container, "test.csv") # single request
+                    @test false # Should have thrown an error
+                catch e
+                    @test e isa StatusError
+                    @test e.status == 403
+                end
+
+                try
+                    Blobs.get(container, "test.csv"; allowMultipart=true, multipartThreshold=1) # multipart request
+                    @test false # Should have thrown an error
+                catch e
+                    @test e isa StatusError
+                    @test e.status == 403
+                end
+
+                try
+                    Blobs.put(container, "test2.csv", csv)
+                    @test false # Should have thrown an error
+                catch e
+                    @test e isa StatusError
+                    @test e.status == 403
+                end
+            end
+
+            @testset "Non-existing file" begin
+                try
+                    Blobs.get(container, "doesnt_exist.csv"; credentials, allowMultipart=false) # single request
+                    @test false # Should have thrown an error
+                catch e
+                    @test e isa StatusError
+                    @test e.status == 404
+                end
+
+                try
+                    Blobs.get(container, "doesnt_exist.csv"; credentials, allowMultipart=true, multipartThreshold=1) # multipart request
+                    @test false # Should have thrown an error
+                catch e
+                    @test e isa StatusError
+                    @test e.status == 404
+                end
+            end
+
+            @testset "Connection error: DNSError" begin
+                non_existent_container_name = string(container.name, "doesntexist")
+                non_existent_baseurl = replace(container.baseurl, container.name => non_existent_container_name)
+                non_existent_container = Blobs.Container(non_existent_container_name, non_existent_baseurl)
+                try
+                    Blobs.get(non_existent_container, "doesnt_exist.csv"; credentials)
+                    @test false # Should have thrown an error
+                catch e
+                    @test e isa ConnectError
+                    @test unwrap_exception(e.error) isa DNSError
+                end
+
+                try
+                    Blobs.put(non_existent_container, "doesnt_exist.csv", csv; credentials)
+                    @test false # Should have thrown an error
+                catch e
+                    @test e isa ConnectError
+                    @test unwrap_exception(e.error) isa DNSError
+                end
+            end
+        end
+        # Azurite is not running at this point
+        @testset "Connection error: IOError" begin
+            try
+                Blobs.get(_stale_container, "doesnt_exist.csv")
+                @test false # Should have thrown an error
+            catch e
+                @test e isa ConnectError
+                @test unwrap_exception(e.error) isa Base.IOError
+            end
+
+            try
+                Blobs.put(_stale_container, "doesnt_exist.csv", "my,da,ta")
+                @test false # Should have thrown an error
+            catch e
+                @test e isa ConnectError
+                @test unwrap_exception(e.error) isa Base.IOError
             end
         end
     end
