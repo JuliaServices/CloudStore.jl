@@ -73,6 +73,28 @@ function Base.getindex(b::BufferBatch, i::Int)
     end
 end
 
+# For smaller object, we don't do a multipart download, but instead just do a single GET request.
+# This changes the exception we get when the provided buffer is too small, as for the multipart
+# case, we do a HEAD request first to know the size of the object, which gives us the opportunity
+# to throw an ArgumentError. But for the single GET case, we don't know the size of the object
+# until we get the response, which would return as a HTTP.RequestError from within HTTP.jl.
+# The idea here is to unwrap the HTTP.RequestError and check if it's an ArgumentError, and if so,
+# throw that instead, so we same exception type is thrown in this case.
+function _check_buffer_too_small_exception(@nospecialize(e::Exception))
+    if e isa HTTP.RequestError
+        request_error = e.error
+        if request_error isa CompositeException
+            length(request_error.exceptions) == 1 || return e
+            request_error = request_error.exceptions[1]
+        end
+        request_error = unwrap_exception(request_error)
+        if request_error isa ArgumentError
+            return request_error
+        end
+    end
+    return e
+end
+
 function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType=nothing;
     multipartThreshold::Int=MULTIPART_THRESHOLD,
     partSize::Int=MULTIPART_SIZE,
@@ -124,8 +146,9 @@ function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType=noth
         elseif out isa AbstractVector{UInt8}
             resp = try
                 getObject(x, url, headers; response_stream=out, kw...)
-            catch
-                throw(ArgumentError("provided output buffer (length = $(length(out))) is too small for actual cloud object size"))
+            catch e
+                e = _check_buffer_too_small_exception(e)
+                rethrow(e)
             end
         elseif out isa String
             if decompress
@@ -172,7 +195,8 @@ function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType=noth
         res = body = Vector{UInt8}(undef, contentLength)
     elseif out isa AbstractVector{UInt8}
         # user-provided buffer is allowed to be larger than actual object size, but not smaller
-        length(out) < contentLength && throw(ArgumentError("out ($(length(out))) must at least be of length $contentLength"))
+        # NOTE: wording of the error message matches what HTTP.jl throws when the buffer is too small
+        length(out) < contentLength && throw(ArgumentError("Unable to grow response stream IOBuffer $(length(out)) large enough for response body size: $(contentLength)"))
         res = out
         body = view(out, 1:contentLength)
     elseif out isa String
