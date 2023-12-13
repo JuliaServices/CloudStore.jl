@@ -162,7 +162,7 @@ check(x, y) = begin; reset!(x); reset!(y); z = read(x) == read(y); reset!(x); re
                     @test false # Should have thrown an error
                 catch e
                     @test e isa ArgumentError
-                    @test e.msg == "out ($(sizeof(out))) must at least be of length $(sizeof(csv))"
+                    @test e.msg == "Unable to grow response stream IOBuffer $(sizeof(out)) large enough for response body size: $(sizeof(csv))"
                 end
             end
 
@@ -376,7 +376,7 @@ end
                     @test false # Should have thrown an error
                 catch e
                     @test e isa ArgumentError
-                    @test e.msg == "out ($(sizeof(out))) must at least be of length $(sizeof(csv))"
+                    @test e.msg == "Unable to grow response stream IOBuffer $(sizeof(out)) large enough for response body size: $(sizeof(csv))"
                 end
             end
 
