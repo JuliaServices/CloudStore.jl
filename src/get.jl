@@ -218,7 +218,7 @@ function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType=noth
                 _n = $n
                 _headers = copy(headers)
                 rng = ((_n - 1) * partSize):min(contentLength - 1, _n * partSize - 1)
-                HTTP2.setheader(_headers, contentRange(rng))
+                HTTP2.setheader(_headers, contentRange(rng)...)
                 if out === nothing || out isa AbstractVector{UInt8}
                     # the Content-Range header is 0-indexed, but the view is 1-indexed
                     _rng = (first(rng) + 1):(last(rng) + 1)
