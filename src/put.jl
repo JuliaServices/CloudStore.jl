@@ -62,7 +62,7 @@ function putObjectImpl(x::AbstractStore, key::String, in::RequestBodyType;
         body = prepBody(in, compress, zlibng)
         resp = putObject(x, key, body; credentials, kw...)
         wbytes[] = get(resp.request.context, :nbytes_written, 0)
-        obj = Object(x, credentials, key, N, etag(HTTP.header(resp, "ETag")))
+        obj = Object(x, credentials, key, N, etag(HTTP2.getheader(resp, "ETag")))
         @goto done
     end
     # multipart upload
