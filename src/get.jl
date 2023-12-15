@@ -226,11 +226,11 @@ function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType=noth
                     # directly as HTTP receives the response body
                     _res = view(res, _rng)
                     r = getObject(x, url, _headers; response_stream=_res, kw...)
-                    Threads.atomic_add!(nbytes, get(r.request.context, :nbytes, 0))
+                    Threads.atomic_add!(nbytes, contentLength)
                 else
                     buf = view(buffers[$i], 1:min(partSize, length(rng)))
                     r = getObject(x, url, _headers; response_stream=buf, kw...)
-                    Threads.atomic_add!(nbytes, get(r.request.context, :nbytes, 0))
+                    Threads.atomic_add!(nbytes, contentLength)
                     put!(() -> write(body, buf), sync, _n)
                 end
             end
