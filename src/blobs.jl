@@ -1,6 +1,6 @@
 module Blobs
 
-using CloudBase.Azure, XMLDict, HTTP, CodecZlib, Base64
+using CloudBase.Azure, XMLDict, HTTP2, CodecZlib, Base64
 using ..API
 import ..parseAzureAccountContainerBlob
 
@@ -66,7 +66,7 @@ end
 function API.completeMultipartUpload(x::Container, url, eTags, uploadId; kw...)
     body = XMLDict.node_xml("BlockList", Dict("Latest" => eTags))
     resp = Azure.put(url; query=Dict("comp" => "blocklist"), body, kw...)
-    return API.etag(HTTP.header(resp, "ETag"))
+    return API.etag(HTTP2.getheader(resp, "ETag"))
 end
 
 delete(x::Container, key::String; kw...) = Azure.delete(API.makeURL(x, key); kw...)

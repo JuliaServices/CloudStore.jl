@@ -25,10 +25,10 @@ end
 function headObjectImpl(x::AbstractStore, key::String;
     multipartThreshold::Int=MULTIPART_THRESHOLD,
     allowMultipart::Bool=true,
-    headers=HTTP.Headers(), kw...)
+    headers=HTTP2.Headers(), kw...)
     url = makeURL(x, key)
     if allowMultipart
-        HTTP.setheader(headers, contentRange(0:(multipartThreshold - 1)))
+        HTTP2.setheader(headers, contentRange(0:(multipartThreshold - 1)))
     end
     return Dict(headObject(x, url, headers; kw...).headers)
 end
@@ -42,16 +42,16 @@ function parseContentRange(str)
     return (parse(Int, m[1]), parse(Int, m[2]), parse(Int, m[3]))
 end
 
-function check_redirect(key, resp)
-    if HTTP.isredirect(resp)
-        try
-            throw(HTTP.StatusError(resp.status, resp.request.method, resp.request.target, resp))
-        catch
-            # The ArgumentError will be caused by the HTTP error to provide more context
-            throw(ArgumentError("Invalid object key: $key"))
-        end
-    end
-end
+# function check_redirect(key, resp)
+#     if HTTP2.isredirect(resp)
+#         try
+#             throw(HTTP2.StatusError(resp.status, resp.request.method, resp.request.target, resp))
+#         catch
+#             # The ArgumentError will be caused by the HTTP2 error to provide more context
+#             throw(ArgumentError("Invalid object key: $key"))
+#         end
+#     end
+# end
 
 decompressorstream(zlibng) = zlibng ? CodecZlibNG.GzipDecompressorStream : CodecZlib.GzipDecompressorStream
 decompressor(zlibng) = zlibng ? CodecZlibNG.GzipDecompressor : CodecZlib.GzipDecompressor
@@ -77,23 +77,23 @@ end
 # This changes the exception we get when the provided buffer is too small, as for the multipart
 # case, we do a HEAD request first to know the size of the object, which gives us the opportunity
 # to throw an ArgumentError. But for the single GET case, we don't know the size of the object
-# until we get the response, which would return as a HTTP.RequestError from within HTTP.jl.
-# The idea here is to unwrap the HTTP.RequestError and check if it's an ArgumentError, and if so,
+# until we get the response, which would return as a HTTP2.RequestError from within HTTP2.jl.
+# The idea here is to unwrap the HTTP2.RequestError and check if it's an ArgumentError, and if so,
 # throw that instead, so we same exception type is thrown in this case.
-function _check_buffer_too_small_exception(@nospecialize(e::Exception))
-    if e isa HTTP.RequestError
-        request_error = e.error
-        if request_error isa CompositeException
-            length(request_error.exceptions) == 1 || return e
-            request_error = request_error.exceptions[1]
-        end
-        request_error = unwrap_exception(request_error)
-        if request_error isa ArgumentError
-            return request_error
-        end
-    end
-    return e
-end
+# function _check_buffer_too_small_exception(@nospecialize(e::Exception))
+#     if e isa HTTP2.RequestError
+#         request_error = e.error
+#         if request_error isa CompositeException
+#             length(request_error.exceptions) == 1 || return e
+#             request_error = request_error.exceptions[1]
+#         end
+#         request_error = unwrap_exception(request_error)
+#         if request_error isa ArgumentError
+#             return request_error
+#         end
+#     end
+#     return e
+# end
 
 function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType=nothing;
     multipartThreshold::Int=MULTIPART_THRESHOLD,
@@ -103,7 +103,7 @@ function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType=noth
     objectMaxSize::Union{Int, Nothing}=out isa AbstractVector{UInt8} ? length(out) : nothing,
     decompress::Bool=false,
     zlibng::Bool=false,
-    headers=HTTP.Headers(),
+    headers=HTTP2.Headers(),
     lograte::Bool=false, kw...)
 
     # if user provided a buffer or signalled the max object size is < multipartThreshold
@@ -147,7 +147,7 @@ function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType=noth
             resp = try
                 getObject(x, url, headers; response_stream=out, kw...)
             catch e
-                e = _check_buffer_too_small_exception(e)
+                # e = _check_buffer_too_small_exception(e)
                 rethrow(e)
             end
         elseif out isa String
@@ -168,7 +168,7 @@ function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType=noth
             end
         end
         # check_redirect(key, resp)
-        nbytes[] = parse(Int, HTTP.header(resp, "Content-Length", "0"))
+        nbytes[] = parse(Int, HTTP2.getheader(resp, "Content-Length", "0"))
         @goto done
     end
 
@@ -179,7 +179,7 @@ function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType=noth
     # the head request also lets us know how big the object it
     resp = API.headObject(x, url, headers; kw...)
     # check_redirect(key, resp)
-    contentLength = parse(Int, HTTP.header(resp, "Content-Length", "0"))
+    contentLength = parse(Int, HTTP2.getheader(resp, "Content-Length", "0"))
     if contentLength == 0
         # if the object is zero-length, return an "empty" version of the output type
         if out === nothing || out isa AbstractVector{UInt8}
@@ -218,7 +218,7 @@ function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType=noth
                 _n = $n
                 _headers = copy(headers)
                 rng = ((_n - 1) * partSize):min(contentLength - 1, _n * partSize - 1)
-                HTTP.setheader(_headers, contentRange(rng))
+                HTTP2.setheader(_headers, contentRange(rng))
                 if out === nothing || out isa AbstractVector{UInt8}
                     # the Content-Range header is 0-indexed, but the view is 1-indexed
                     _rng = (first(rng) + 1):(last(rng) + 1)
