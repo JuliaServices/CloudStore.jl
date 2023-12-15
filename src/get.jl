@@ -28,7 +28,7 @@ function headObjectImpl(x::AbstractStore, key::String;
     headers=HTTP2.Headers(), kw...)
     url = makeURL(x, key)
     if allowMultipart
-        HTTP2.setheader(headers, contentRange(0:(multipartThreshold - 1)))
+        HTTP2.setheader(headers, contentRange(0:(multipartThreshold - 1))...)
     end
     return Dict(headObject(x, url, headers; kw...).headers)
 end
