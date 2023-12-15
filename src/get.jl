@@ -168,7 +168,7 @@ function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType=noth
             end
         end
         # check_redirect(key, resp)
-        nbytes[] = parse(Int, HTTP2.getheader(resp, "Content-Length", "0"))
+        nbytes[] = parse(Int, HTTP2.getheader(resp.headers, "Content-Length", "0"))
         @goto done
     end
 
@@ -179,7 +179,7 @@ function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType=noth
     # the head request also lets us know how big the object it
     resp = API.headObject(x, url, headers; kw...)
     # check_redirect(key, resp)
-    contentLength = parse(Int, HTTP2.getheader(resp, "Content-Length", "0"))
+    contentLength = parse(Int, HTTP2.getheader(resp.headers, "Content-Length", "0"))
     if contentLength == 0
         # if the object is zero-length, return an "empty" version of the output type
         if out === nothing || out isa AbstractVector{UInt8}
