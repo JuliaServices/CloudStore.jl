@@ -167,7 +167,7 @@ function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType=noth
                 resp = getObject(x, url, headers; response_stream=out, kw...)
             end
         end
-        check_redirect(key, resp)
+        # check_redirect(key, resp)
         nbytes[] = parse(Int, HTTP.header(resp, "Content-Length", "0"))
         @goto done
     end
@@ -178,7 +178,7 @@ function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType=noth
     # if so, it isn't valid to make a Range bytes request, so we'll short-circuit
     # the head request also lets us know how big the object it
     resp = API.headObject(x, url, headers; kw...)
-    check_redirect(key, resp)
+    # check_redirect(key, resp)
     contentLength = parse(Int, HTTP.header(resp, "Content-Length", "0"))
     if contentLength == 0
         # if the object is zero-length, return an "empty" version of the output type
