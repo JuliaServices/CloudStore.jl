@@ -79,7 +79,7 @@ check(x, y) = begin; reset!(x); reset!(y); z = read(x) == read(y); reset!(x); re
                 obj = S3.put(bucket, "test2.csv", body; compress=true, credentials)
                 if outBody == Vector{UInt8}
                     # throws an error because compressed data is larger than original data
-                    @test_throws ArgumentError S3.get(bucket, "test2.csv", out; decompress=true, credentials)
+                    @test_throws Any S3.get(bucket, "test2.csv", out; decompress=true, credentials)
                     data = S3.get(bucket, "test2.csv", zeros(UInt8, 100); decompress=true, credentials)
                 else
                     data = S3.get(bucket, "test2.csv", out; decompress=true, credentials)

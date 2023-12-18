@@ -48,7 +48,7 @@ end
 
 function API.uploadPart(x::Bucket, url, part, partNumber, uploadId; kw...)
     resp = AWS.put(url, [], part; query=Dict("partNumber" => string(partNumber), "uploadId" => uploadId), service="s3", kw...)
-    return (HTTP2.getheader(resp.headers, "ETag"), Base.get(resp.request.context, :nbytes_written, 0))
+    return (HTTP2.getheader(resp.headers, "ETag"), resp.metrics.request_body_length)
 end
 
 function API.completeMultipartUpload(x::Bucket, url, eTags, uploadId; kw...)
