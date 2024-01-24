@@ -139,6 +139,7 @@ function parseAWSBucketRegionKey(url; parseLocal::Bool=false)
     m = match(r"^https://(?<bucket>[^\.]+)\.s3(?<accelerate>-accelerate)?(?:\.(?<region>[^\.]+))?\.amazonaws\.com(?:/(?<key>.+))?$"i, url)
     m !== nothing && return _validate_aws(true, !isnothing(m[:accelerate]), nothing, m[:bucket], m[:region], m[:key])
 
+    ### See: https://docs.aws.amazon.com/AmazonS3/latest/userguide/privatelink-interface-endpoints.html
     # https://bucket.vpce-1a2b3c4d-5e6f.s3.region-code.vpce.amazonaws.com/bucket-name/key-name
     # https://bucket.vpce-1a2b3c4d-5e6f.s3.region-code.vpce.amazonaws.com/bucket-name
     m = match(r"^https://bucket\.vpce[^\.]+\.s3\.(?<region>[^\.]+)\.vpce\.amazonaws\.com/(?<bucket>[^/]+)(?:/(?<key>.+))?$"i, url)
