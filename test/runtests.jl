@@ -928,9 +928,9 @@ end
         @test CloudStore.validate_bucket_name("a"^63, false) == "a"^63
         @test CloudStore.validate_bucket_name("a"^3, false) == "a"^3
 
-        @test_throws "ArgumentError: Validation failed for `region`" CloudStore.parseAWSBucketRegionKey("https://bucket.vpce-1a2b3c4d-5e6f.s3.xx-xxxx-x.vpce.amazonaws.com/bucket-name")
-        @test_throws "ArgumentError: Validation failed for `bucket`" CloudStore.parseAWSBucketRegionKey("https://bucket.vpce-1a2b3c4d-5e6f.s3.us-west-2.vpce.amazonaws.com/bn")
-        @test_throws "ArgumentError: Validation failed for `key` " CloudStore.parseAWSBucketRegionKey("https://bucket.vpce-1a2b3c4d-5e6f.s3.us-west-2.vpce.amazonaws.com/bucket-name/key-n$("a" ^ 1024)me")
+        @test_throws ArgumentError("Validation failed for `region` \"xx-xxxx-x\"") CloudStore.parseAWSBucketRegionKey("https://bucket.vpce-1a2b3c4d-5e6f.s3.xx-xxxx-x.vpce.amazonaws.com/bucket-name")
+        @test_throws ArgumentError("Validation failed for `bucket` name \"bn\": Bucket names must be between 3 (min) and 63 (max) characters long.") CloudStore.parseAWSBucketRegionKey("https://bucket.vpce-1a2b3c4d-5e6f.s3.us-west-2.vpce.amazonaws.com/bn")
+        @test_throws ArgumentError("Validation failed for `key` \"key-n$("a" ^ 1024)me\": The key name must be shorter than 1025 bytes.") CloudStore.parseAWSBucketRegionKey("https://bucket.vpce-1a2b3c4d-5e6f.s3.us-west-2.vpce.amazonaws.com/bucket-name/key-n$("a" ^ 1024)me")
     end
 
     @testset "validate_container_name" begin
