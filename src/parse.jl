@@ -142,8 +142,8 @@ function parseAWSBucketRegionKey(url; parseLocal::Bool=false)
     ### See: https://docs.aws.amazon.com/AmazonS3/latest/userguide/privatelink-interface-endpoints.html
     # https://bucket.vpce-1a2b3c4d-5e6f.s3.region-code.vpce.amazonaws.com/bucket-name/key-name
     # https://bucket.vpce-1a2b3c4d-5e6f.s3.region-code.vpce.amazonaws.com/bucket-name
-    m = match(r"^https://bucket\.vpce[^\.]+\.s3\.(?<region>[^\.]+)\.vpce\.amazonaws\.com/(?<bucket>[^/]+)(?:/(?<key>.+))?$"i, url)
-    m !== nothing && return _validate_aws(true, false, nothing, m[:bucket], m[:region], m[:key])
+    m = match(r"^(?<host>https://bucket\.vpce[^\.]+\.s3\.(?<region>[^\.]+)\.vpce\.amazonaws\.com)/(?<bucket>[^/]+)(?:/(?<key>.+))?$"i, url)
+    m !== nothing && return _validate_aws(true, false, m[:host], m[:bucket], m[:region], m[:key])
     # https://s3.region-code.amazonaws.com/bucket-name/key-name
     # https://s3.region-code.amazonaws.com/bucket-name
     m = match(r"^https://s3(?:\.(?<region>[^\.]+))?\.amazonaws\.com/(?<bucket>[^/]+)(?:/(?<key>.+))?$"i, url)
