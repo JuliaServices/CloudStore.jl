@@ -531,6 +531,9 @@ end
         ("S3://bucket-name", (true, false, nothing, "bucket-name", "", "")),
         ("HTtp://127.0.0.1:27181/bucket-name/key-name", (true, false, "HTtp://127.0.0.1:27181", "bucket-name", "", "key-name")),
         ("htTP://127.0.0.1:27181/bucket-name", (true, false, "htTP://127.0.0.1:27181", "bucket-name", "", "")),
+
+        ("https://bucket.vpce-1a2b3c4d-5e6f.s3.us-west-2.vpce.amazonaws.com/bucket-name", (true, false, nothing, "bucket-name", "us-west-2", "")),
+        ("https://bucket.vpce-1a2b3c4d-5e6f.s3.us-west-2.vpce.amazonaws.com/bucket-name/key-name", (true, false, nothing, "bucket-name", "us-west-2", "key-name")),
     ]
     for (url, parts) in s3
         ok, accelerate, host, bucket, reg, key = CloudStore.parseAWSBucketRegionKey(url; parseLocal=true)

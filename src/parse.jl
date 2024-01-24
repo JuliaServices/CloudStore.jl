@@ -18,6 +18,7 @@ const AWS_REGIONS = Set{String}([
     "ap-southeast-2",
     "ap-northeast-1",
     "ca-central-1",
+    "ca-west-1",
     "eu-central-1",
     "eu-west-1",
     "eu-west-2",
@@ -26,6 +27,7 @@ const AWS_REGIONS = Set{String}([
     "eu-south-2",
     "eu-north-1",
     "eu-central-2",
+    "il-central-1",
     "me-south-1",
     "me-central-1",
     "sa-east-1",
@@ -136,6 +138,10 @@ function parseAWSBucketRegionKey(url; parseLocal::Bool=false)
     # https://bucket-name.s3.amazonaws.com
     m = match(r"^https://(?<bucket>[^\.]+)\.s3(?<accelerate>-accelerate)?(?:\.(?<region>[^\.]+))?\.amazonaws\.com(?:/(?<key>.+))?$"i, url)
     m !== nothing && return _validate_aws(true, !isnothing(m[:accelerate]), nothing, m[:bucket], m[:region], m[:key])
+
+    # https://bucket.vpce-1a2b3c4d-5e6f.s3.region-code.vpce.amazonaws.com
+    m = match(r"^https://bucket\.vpce[^\.]+\.s3\.(?<region>[^\.]+)\.vpce\.amazonaws\.com/(?<bucket>[^/]+)(?:/(?<key>.+))?$"i, url)
+    m !== nothing && return _validate_aws(true, false, nothing, m[:bucket], m[:region], m[:key])
     # https://s3.region-code.amazonaws.com/bucket-name/key-name
     # https://s3.region-code.amazonaws.com/bucket-name
     m = match(r"^https://s3(?:\.(?<region>[^\.]+))?\.amazonaws\.com/(?<bucket>[^/]+)(?:/(?<key>.+))?$"i, url)
