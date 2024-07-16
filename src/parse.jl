@@ -40,7 +40,7 @@ function validate_bucket_name(bucket_name, accelerate)
     !(3 <= ncodeunits(bucket_name) <= 63)    && throw(ArgumentError("Validation failed for `bucket` name $(repr(bucket_name)): Bucket names must be between 3 (min) and 63 (max) characters long."))
     occursin("..", bucket_name)              && throw(ArgumentError("Validation failed for `bucket` name $(repr(bucket_name)): Bucket names must not contain two adjacent periods."))
     startswith(bucket_name, "xn--")          && throw(ArgumentError("Validation failed for `bucket` name $(repr(bucket_name)): Bucket names must not start with the prefix `xn--`."))
-    endswith(bucket_name, "-s3alias")        && throw(ArgumentError("Validation failed for `bucket` name $(repr(bucket_name)): Bucket names must not end with the suffix `-s3alias`."))
+    # endswith(bucket_name, "-s3alias")        && throw(ArgumentError("Validation failed for `bucket` name $(repr(bucket_name)): Bucket names must not end with the suffix `-s3alias`."))
     accelerate && occursin(".", bucket_name) && throw(ArgumentError("Validation failed for `bucket` name $(repr(bucket_name)): Buckets used with Amazon S3 Transfer Acceleration can't have dots (.) in their names."))
     !contains(bucket_name, r"^[a-z0-9][\.\-a-z0-9]+[a-z0-9]$") &&
         throw(ArgumentError("Validation failed for `bucket` name $(repr(bucket_name)): Bucket names can consist only of lowercase letters, numbers, dots (.), and hyphens (-). Bucket names must begin and end with a letter or number."))

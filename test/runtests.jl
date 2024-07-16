@@ -884,8 +884,8 @@ end
         @test !parse_s3_url(bucket="a..b", accelerate=false)[1]
         @test_throws ArgumentError CloudStore.validate_bucket_name("xn--abc", false)
         @test_throws ArgumentError parse_s3_url(bucket="xn--abc", accelerate=false)
-        @test_throws ArgumentError CloudStore.validate_bucket_name("abcs-s3alias", false)
-        @test_throws ArgumentError parse_s3_url(bucket="abcs-s3alias", accelerate=false)
+        # @test_throws ArgumentError CloudStore.validate_bucket_name("abcs-s3alias", false)
+        # @test_throws ArgumentError parse_s3_url(bucket="abcs-s3alias", accelerate=false)
         @test_throws ArgumentError CloudStore.validate_bucket_name("abcA", false)
         @test_throws ArgumentError parse_s3_url(bucket="abcA", accelerate=false)
         @test_throws ArgumentError CloudStore.validate_bucket_name("abc-", false)
@@ -911,8 +911,8 @@ end
         @test !parse_s3_url(bucket="a..b", accelerate=true)[1]
         @test_throws ArgumentError CloudStore.validate_bucket_name("xn--abc", true)
         @test_throws ArgumentError parse_s3_url(bucket="xn--abc", accelerate=true)
-        @test_throws ArgumentError CloudStore.validate_bucket_name("abcs-s3alias", true)
-        @test_throws ArgumentError parse_s3_url(bucket="abcs-s3alias", accelerate=true)
+        # @test_throws ArgumentError CloudStore.validate_bucket_name("abcs-s3alias", true)
+        # @test_throws ArgumentError parse_s3_url(bucket="abcs-s3alias", accelerate=true)
         @test_throws ArgumentError CloudStore.validate_bucket_name("abcA", true)
         @test_throws ArgumentError parse_s3_url(bucket="abcA", accelerate=true)
         @test_throws ArgumentError CloudStore.validate_bucket_name("abc-", true)
