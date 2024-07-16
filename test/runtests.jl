@@ -882,10 +882,6 @@ end
         @test_throws ArgumentError parse_s3_url(bucket="a"^64, accelerate=false)
         @test_throws ArgumentError CloudStore.validate_bucket_name("a..b", false)
         @test !parse_s3_url(bucket="a..b", accelerate=false)[1]
-        @test_throws ArgumentError CloudStore.validate_bucket_name("xn--abc", false)
-        @test_throws ArgumentError parse_s3_url(bucket="xn--abc", accelerate=false)
-        @test_throws ArgumentError CloudStore.validate_bucket_name("abcs-s3alias", false)
-        @test_throws ArgumentError parse_s3_url(bucket="abcs-s3alias", accelerate=false)
         @test_throws ArgumentError CloudStore.validate_bucket_name("abcA", false)
         @test_throws ArgumentError parse_s3_url(bucket="abcA", accelerate=false)
         @test_throws ArgumentError CloudStore.validate_bucket_name("abc-", false)
@@ -909,10 +905,6 @@ end
         @test_throws ArgumentError parse_s3_url(bucket="a"^64, accelerate=true)
         @test_throws ArgumentError CloudStore.validate_bucket_name("a..b", true)
         @test !parse_s3_url(bucket="a..b", accelerate=true)[1]
-        @test_throws ArgumentError CloudStore.validate_bucket_name("xn--abc", true)
-        @test_throws ArgumentError parse_s3_url(bucket="xn--abc", accelerate=true)
-        @test_throws ArgumentError CloudStore.validate_bucket_name("abcs-s3alias", true)
-        @test_throws ArgumentError parse_s3_url(bucket="abcs-s3alias", accelerate=true)
         @test_throws ArgumentError CloudStore.validate_bucket_name("abcA", true)
         @test_throws ArgumentError parse_s3_url(bucket="abcA", accelerate=true)
         @test_throws ArgumentError CloudStore.validate_bucket_name("abc-", true)
@@ -927,6 +919,11 @@ end
         @test CloudStore.validate_bucket_name("a.b-c1", false) == "a.b-c1"
         @test CloudStore.validate_bucket_name("a"^63, false) == "a"^63
         @test CloudStore.validate_bucket_name("a"^3, false) == "a"^3
+        # xn-- prefix and -s3alias suffix are apparently illegal in bucket names create by
+        # the user but can be received from AWS, see e.g.
+        # https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-points-alias.html
+        @test CloudStore.validate_bucket_name("xn--a", false) == "xn--a"
+        @test CloudStore.validate_bucket_name("a-s3alias", false) == "a-s3alias"
 
         @test_throws ArgumentError("Validation failed for `region` \"xx-xxxx-x\"") CloudStore.parseAWSBucketRegionKey("https://bucket.vpce-1a2b3c4d-5e6f.s3.xx-xxxx-x.vpce.amazonaws.com/bucket-name")
         @test_throws ArgumentError("Validation failed for `bucket` name \"bn\": Bucket names must be between 3 (min) and 63 (max) characters long.") CloudStore.parseAWSBucketRegionKey("https://bucket.vpce-1a2b3c4d-5e6f.s3.us-west-2.vpce.amazonaws.com/bn")
