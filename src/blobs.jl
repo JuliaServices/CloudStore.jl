@@ -60,7 +60,12 @@ API.startMultipartUpload(x::Container, key; kw...) = nothing
 function API.uploadPart(x::Container, url, part, partNumber, uploadId; kw...)
     blockid = base64encode(lpad(partNumber - 1, 64, '0'))
     resp = Azure.put(url, [], part; query=Dict("comp" => "block", "blockid" => blockid), kw...)
-    return (blockid, resp.metrics.request_body_length)
+    body_length = if hasproperty(resp, :metrics)
+        resp.metrics.request_body_length
+    else
+        Base.get(resp.request.context, :nbytes_written, 0)
+    end
+    return (blockid, body_length)
 end
 
 function API.completeMultipartUpload(x::Container, url, eTags, uploadId; kw...)
