@@ -94,6 +94,7 @@ function putObjectImpl(x::AbstractStore, key::String, in::RequestBodyType;
     end
     # cleanup body
     if body isa compressorstream(zlibng)
+        close(body)
         body = body.stream
     end
     if in isa String
