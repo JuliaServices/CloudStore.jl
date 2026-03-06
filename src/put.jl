@@ -8,9 +8,9 @@ function prepBody(x::RequestBodyType, compress::Bool, zlibng::Bool)
         body = Mmap.mmap(x)
     elseif x isa IOBuffer
         if x.ptr == 1
-            body = x.data
+            body = Vector{UInt8}(x.data)
         else
-            body = x.data[x.ptr:end]
+            body = Vector{UInt8}(@view x.data[x.ptr:end])
         end
     elseif x isa IO
         body = read(x)
@@ -23,6 +23,9 @@ end
 function prepBodyMultipart(x::RequestBodyType, compress::Bool, zlibng::Bool)
     if x isa String
         body = open(x, "r") # need to close later!
+    elseif x isa IOBuffer
+        data = x.ptr == 1 ? Vector{UInt8}(x.data) : Vector{UInt8}(@view x.data[x.ptr:end])
+        body = IOBuffer(data)
     elseif x isa AbstractVector{UInt8}
         body = IOBuffer(x)
     else
