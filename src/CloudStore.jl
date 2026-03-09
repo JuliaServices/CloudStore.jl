@@ -1,6 +1,6 @@
 module CloudStore
 
-import CloudBase: AWS, Azure, CloudTest
+import CloudBase: AWS, Azure, GCP, CloudTest
 
 # convenience module that holds consts, utils, and functions to overload
 # for specific clouds
@@ -73,6 +73,11 @@ head(x::Azure.Container, key::String; kw...) = Blobs.head(x, key; kw...)
 put(x::Azure.Container, key::String, in::RequestBodyType; kw...) = Blobs.put(x, key, in; kw...)
 delete(x::Azure.Container, key::String; kw...) = Blobs.delete(x, key; kw...)
 
+get(x::GCP.Bucket, key::String, out::ResponseBodyType=nothing; kw...) = GCS.get(x, key, out; kw...)
+head(x::GCP.Bucket, key::String; kw...) = GCS.head(x, key; kw...)
+put(x::GCP.Bucket, key::String, in::RequestBodyType; kw...) = GCS.put(x, key, in; kw...)
+delete(x::GCP.Bucket, key::String; kw...) = GCS.delete(x, key; kw...)
+
 function get(url::AbstractString, out::ResponseBodyType=nothing; region=nothing, nowarn::Bool=false, kw...)
     store, key = parseURLForDispatch(url, region, nowarn)
     return get(store, key, out; kw...)
@@ -101,6 +106,7 @@ end
 # cloud-specific API implementations
 include("s3.jl")
 include("blobs.jl")
+include("gcs.jl")
 const BlobStorage = Blobs
 
 end # module CloudStore

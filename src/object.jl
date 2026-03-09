@@ -1,11 +1,11 @@
-import CloudBase: AbstractStore, CloudCredentials, AWS, Azure
+import CloudBase: AbstractStore, CloudCredentials, AWS, Azure, GCP
 
 const DEFAULT_PREFETCH_SIZE = 32 * 1024 * 1024
 const DEFAULT_PREFETCH_MULTIPART_SIZE = 8 * 1024 * 1024
 
 struct Object{T <: AbstractStore}
     store::T
-    credentials::Union{Nothing, AWS.Credentials, Azure.Credentials}
+    credentials::Union{Nothing, CloudCredentials}
     key::String
     size::Int
     eTag::String
@@ -14,7 +14,7 @@ end
 
 Object(
     store::AbstractStore,
-    creds::Union{Nothing, AWS.Credentials, Azure.Credentials},
+    creds::Union{Nothing, CloudCredentials},
     key::AbstractString,
     size::Integer,
     eTag::AbstractString,
