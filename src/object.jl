@@ -432,7 +432,7 @@ can be used instead.
 # Get an IO stream for a remote CSV file `test.csv` living in your S3 bucket
 io = MultipartUploadStream(bucket, "test.csv"; credentials)
 
-# Write a chunk of data (Vector{UInt8}) to the stream
+# Write a chunk of data (`AbstractVector{UInt8}`) to the stream
 write(io, data;)
 
 # Wait for all chunks to be uploaded
@@ -536,8 +536,10 @@ mutable struct MultipartUploadStream{T <: AbstractStore} <: IO
     end
 end
 
-# Writes a data chunk to the channel and spawn
-function Base.write(io::MultipartUploadStream, bytes::Vector{UInt8}; kw...)
+@inline _own_upload_chunk(bytes::Vector{UInt8}) = bytes
+@inline _own_upload_chunk(bytes::AbstractVector{UInt8}) = Vector{UInt8}(bytes)
+
+function _write_upload_chunk!(io::MultipartUploadStream, bytes::AbstractVector{UInt8}; kw...)
     local part_n
     Base.@lock io.cond_wait begin
         io.ntasks += 1
@@ -546,11 +548,16 @@ function Base.write(io::MultipartUploadStream, bytes::Vector{UInt8}; kw...)
         notify(io.cond_wait)
     end
     Base.acquire(io.sem)
+    owned_bytes = _own_upload_chunk(bytes)
     # We expect the data chunks to be written in order in the channel.
-    put!(io.upload_queue, (part_n, bytes))
+    put!(io.upload_queue, (part_n, owned_bytes))
     Threads.@spawn _upload_task($io; $(kw)...)
     return nothing
 end
+
+# Writes a data chunk to the channel and spawn
+Base.write(io::MultipartUploadStream, bytes::StridedVector{UInt8}; kw...) = _write_upload_chunk!(io, bytes; kw...)
+Base.write(io::MultipartUploadStream, bytes::AbstractVector{UInt8}; kw...) = _write_upload_chunk!(io, bytes; kw...)
 
 # Waits for all parts to be uploaded
 function Base.wait(io::MultipartUploadStream)

@@ -1,31 +1,37 @@
 nbytes(x::AbstractVector{UInt8}) = length(x)
 nbytes(x::String) = filesize(x)
-nbytes(x::IOBuffer) = x.size - x.ptr + 1
+nbytes(x::IOBuffer) = max(x.size - x.ptr + 1, 0)
 nbytes(x::IO) = eof(x) ? 0 : bytesavailable(x)
+
+@inline function _iobuffer_data_view(x::IOBuffer)
+    if x.ptr > x.size
+        return view(x.data, 1:0)
+    end
+    return @view x.data[x.ptr:x.size]
+end
 
 function prepBody(x::RequestBodyType, compress::Bool, zlibng::Bool)
     if x isa String || x isa IOStream
         body = Mmap.mmap(x)
     elseif x isa IOBuffer
-        if x.ptr == 1
-            body = Vector{UInt8}(x.data)
-        else
-            body = Vector{UInt8}(@view x.data[x.ptr:end])
-        end
+        body = _iobuffer_data_view(x)
     elseif x isa IO
         body = read(x)
     else
         body = x
     end
-    return compress ? transcode(compressor(zlibng), body) : body
+    if compress
+        body isa Vector{UInt8} || (body = Vector{UInt8}(body))
+        return transcode(compressor(zlibng), body)
+    end
+    return body
 end
 
 function prepBodyMultipart(x::RequestBodyType, compress::Bool, zlibng::Bool)
     if x isa String
-        body = open(x, "r") # need to close later!
+        body = IOBuffer(Mmap.mmap(x))
     elseif x isa IOBuffer
-        data = x.ptr == 1 ? Vector{UInt8}(x.data) : Vector{UInt8}(@view x.data[x.ptr:end])
-        body = IOBuffer(data)
+        body = IOBuffer(_iobuffer_data_view(x))
     elseif x isa AbstractVector{UInt8}
         body = IOBuffer(x)
     else
@@ -71,38 +77,29 @@ function putObjectImpl(x::AbstractStore, key::String, in::RequestBodyType;
     # multipart upload
     uploadState = startMultipartUpload(x, key; credentials, kw...)
     url = makeURL(x, key)
-    eTags = String[]
-    sync = OrderedSynchronizer(1)
     body = prepBodyMultipart(in, compress, zlibng)
-    nTasks = cld(N, partSize)
-    nLoops = cld(nTasks, batchSize)
-    # while nLoops * batchSize is the *max* # of iterations we'll do
-    # if we're compressing, it will likely be much fewer, so we add
-    # eof(body) checks to both loops to account for earlier termination
-    for j = 1:nLoops
+    eTags = String[]
+    sizehint!(eTags, cld(N, partSize))
+    last_part = 0
+    while !eof(body)
         @sync for i = 1:batchSize
             eof(body) && break
-            n = (j - 1) * batchSize + i
+            last_part += 1
+            length(eTags) < last_part && resize!(eTags, last_part)
             part = _read(body, partSize)
             Threads.@spawn begin
-                _n = $n
+                _n = $last_part
                 parteTag, wb = uploadPart(x, url, $part, _n, uploadState; credentials, kw...)
                 Threads.atomic_add!(wbytes, wb)
-                # we synchronize the eTags here because the order matters
-                # for the final call to completeMultipartUpload
-                put!(() -> push!(eTags, parteTag), sync, _n)
+                eTags[_n] = parteTag
             end
         end
-        eof(body) && break
     end
     # cleanup body
     if body isa compressorstream(zlibng)
         close(body)
-        body = body.stream
     end
-    if in isa String
-        close(body)
-    end
+    resize!(eTags, last_part)
     eTag = completeMultipartUpload(x, url, eTags, uploadState; credentials, kw...)
     obj = Object(x, credentials, key, N, eTag)
 @label done

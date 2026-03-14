@@ -209,14 +209,17 @@ function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType=noth
 
     nTasks = max(1, cld(contentLength - 1, partSize))
     nLoops = cld(nTasks, batchSize)
-    sync = OrderedSynchronizer(1)
+    multipart_headers = [copy(headers) for _ in 1:batchSize]
+    batch_nbytes = zeros(Int, batchSize)
     for j = 1:nLoops
+        batch_count = min(batchSize, nTasks - ((j - 1) * batchSize))
+        fill!(batch_nbytes, 0)
         @sync for i = 1:batchSize
             n = (j - 1) * batchSize + i
             n > nTasks && break
             Threads.@spawn begin
                 _n = $n
-                _headers = copy(headers)
+                _headers = multipart_headers[$i]
                 rng = ((_n - 1) * partSize):min(contentLength - 1, _n * partSize - 1)
                 HTTP.setheader(_headers, contentRange(rng))
                 if out === nothing || out isa AbstractVector{UInt8}
@@ -226,13 +229,23 @@ function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType=noth
                     # directly as HTTP receives the response body
                     _res = view(res, _rng)
                     r = getObject(x, url, _headers; response_stream=_res, kw...)
-                    Threads.atomic_add!(nbytes, get(r.request.context, :nbytes, 0))
+                    nb = get(r.request.context, :nbytes, 0)
+                    batch_nbytes[$i] = nb
+                    Threads.atomic_add!(nbytes, nb)
                 else
                     buf = view(buffers[$i], 1:min(partSize, length(rng)))
                     r = getObject(x, url, _headers; response_stream=buf, kw...)
-                    Threads.atomic_add!(nbytes, get(r.request.context, :nbytes, 0))
-                    put!(() -> write(body, buf), sync, _n)
+                    nb = get(r.request.context, :nbytes, 0)
+                    batch_nbytes[$i] = nb
+                    Threads.atomic_add!(nbytes, nb)
                 end
+            end
+        end
+        if !(out === nothing || out isa AbstractVector{UInt8})
+            for i = 1:batch_count
+                nb = batch_nbytes[i]
+                nb == 0 && continue
+                write(body, view(buffers[i], 1:nb))
             end
         end
     end

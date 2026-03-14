@@ -7,6 +7,16 @@ using ExceptionUnwrapping: unwrap_exception
 
 bytes(x) = codeunits(x)
 
+function pseudo_bytes(n)
+    x = UInt32(0x12345678)
+    bytes = Vector{UInt8}(undef, n)
+    for i in eachindex(bytes)
+        x = UInt32(1664525) * x + UInt32(1013904223)
+        bytes[i] = UInt8(x >>> 24)
+    end
+    return bytes
+end
+
 function stringfile(x)
     path, io = mktemp()
     write(io, x)
@@ -349,6 +359,19 @@ end
                 objs = Blobs.list(container; credentials)
                 @test length(objs) == 0
             end
+        end
+    end
+
+    @testset "Multipart compression handles expanded output" begin
+        Azurite.with(; debug=true) do conf
+            credentials, container = conf
+            body = pseudo_bytes(1_024_123)
+            @test length(transcode(CodecZlib.GzipCompressor, body)) > length(body)
+            obj = Blobs.put(container, "expanded-compressed.bin", body;
+                compress=true, multipartThreshold=1_000_000, partSize=length(body), credentials)
+            data = Blobs.get(container, "expanded-compressed.bin"; decompress=true, credentials)
+            @test obj.size == length(body)
+            @test check(body, data)
         end
     end
 
@@ -1039,6 +1062,7 @@ end
     Minio.with(; debug=true) do conf
         credentials, bucket = conf
         multicsv = "1,2,3,4,5,6,7,8,9,1\n"^1000000; # 20MB
+        source = Vector{UInt8}(codeunits(multicsv))
 
         N = 5500000
         mus_obj = CloudStore.MultipartUploadStream(bucket, "test.csv"; credentials)
@@ -1046,9 +1070,7 @@ end
         i = 1
         while i < sizeof(multicsv)
             nb = i + N > length(multicsv) ? length(multicsv)-i+1 : N
-            buf = Vector{UInt8}(undef, nb)
-            copyto!(buf, 1, codeunits(multicsv), i, nb)
-            CloudStore.write(mus_obj, buf;)
+            CloudStore.write(mus_obj, @view(source[i:i + nb - 1]);)
             i += N
         end
 
@@ -1056,6 +1078,7 @@ end
         CloudStore.close(mus_obj; credentials)
         obj = CloudStore.Object(bucket, "test.csv"; credentials)
         @test length(obj) == sizeof(multicsv)
+        @test check(CloudStore.get(bucket, "test.csv"; credentials), source)
     end
 end
 
@@ -1106,6 +1129,7 @@ end
     Azurite.with(; debug=true) do conf
         credentials, bucket = conf
         multicsv = "1,2,3,4,5,6,7,8,9,1\n"^1000000; # 20MB
+        source = Vector{UInt8}(codeunits(multicsv))
 
         N = 2000000
         mus_obj = CloudStore.MultipartUploadStream(bucket, "test.csv"; credentials)
@@ -1113,9 +1137,7 @@ end
         i = 1
         while i < sizeof(multicsv)
             nb = i + N > length(multicsv) ? length(multicsv)-i+1 : N
-            buf = Vector{UInt8}(undef, nb)
-            copyto!(buf, 1, codeunits(multicsv), i, nb)
-            CloudStore.write(mus_obj, buf;)
+            CloudStore.write(mus_obj, @view(source[i:i + nb - 1]);)
             i += N
         end
 
@@ -1123,6 +1145,7 @@ end
         CloudStore.close(mus_obj; credentials)
         obj = CloudStore.Object(bucket, "test.csv"; credentials)
         @test length(obj) == sizeof(multicsv)
+        @test check(CloudStore.get(bucket, "test.csv"; credentials), source)
     end
 end
 
