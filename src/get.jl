@@ -43,7 +43,7 @@ function parseContentRange(str)
 end
 
 function check_redirect(key, resp)
-    if HTTP.isredirect(resp)
+    if is_redirect_response(resp)
         try
             throw(HTTP.StatusError(resp.status, resp.request.method, resp.request.target, resp))
         catch
@@ -77,11 +77,12 @@ end
 # This changes the exception we get when the provided buffer is too small, as for the multipart
 # case, we do a HEAD request first to know the size of the object, which gives us the opportunity
 # to throw an ArgumentError. But for the single GET case, we don't know the size of the object
-# until we get the response, which would return as a HTTP.RequestError from within HTTP.jl.
-# The idea here is to unwrap the HTTP.RequestError and check if it's an ArgumentError, and if so,
-# throw that instead, so we same exception type is thrown in this case.
+# until we get the response, which returned as an HTTP.RequestError in HTTP 1.
+# The idea here is to unwrap that error shape when present and check if it's an
+# ArgumentError, and if so, throw that instead, so we use the same exception type
+# in this case.
 function _check_buffer_too_small_exception(@nospecialize(e::Exception))
-    if e isa HTTP.RequestError
+    if isdefined(HTTP, :RequestError) && e isa getproperty(HTTP, :RequestError)
         request_error = e.error
         if request_error isa CompositeException
             length(request_error.exceptions) == 1 || return e

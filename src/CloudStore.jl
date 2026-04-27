@@ -30,6 +30,7 @@ asArray(x) = [x]
 
 etag(x) = strip(x, '"')
 makeURL(x::AbstractStore, key) = joinpath(x.baseurl, lstrip(key, '/'))
+is_redirect_response(resp) = resp.status in (301, 302, 303, 307, 308)
 
 include("object.jl")
 
