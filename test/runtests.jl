@@ -45,6 +45,50 @@ check(x::String, y::AbstractVector{UInt8}) = read(x) == y
 check(x::IO, y::AbstractVector{UInt8}) = begin; reset!(x); z = read(x) == y; reset!(x); z end
 check(x, y) = begin; reset!(x); reset!(y); z = read(x) == read(y); reset!(x); reset!(y); z end
 
+@testset "prepBody IOBuffer bounds" begin
+    API = CloudStore.API
+    # `.data` is the buffer's allocated capacity, not its contents. Only the bytes in
+    # [ptr, size] are real data; the rest of the allocation is whatever was there before.
+    written() = (io = IOBuffer(); write(io, "hello world"); io)
+
+    # a buffer written to and not rewound has nothing left to read, matching `nbytes`
+    io = written()
+    @test API.nbytes(io) == 0
+    @test API.prepBody(io, false, false) == UInt8[]
+
+    # rewound, it yields exactly the written bytes - not the padded capacity
+    io = written(); seek(io, 0)
+    body = API.prepBody(io, false, false)
+    @test length(body) == 11
+    @test String(copy(body)) == "hello world"
+    @test length(io.data) > 11   # capacity really is larger, so this is a real bound
+
+    # the read position is respected
+    io = written(); seek(io, 6)
+    @test String(copy(API.prepBody(io, false, false))) == "world"
+
+    # compression works for buffers whose data is a Memory (Julia 1.11+), which
+    # transcode does not accept directly
+    io = written(); seek(io, 0)
+    compressed = API.prepBody(io, true, false)
+    @test !isempty(compressed)
+    @test transcode(GzipDecompressor, Vector{UInt8}(compressed)) == Vector{UInt8}(codeunits("hello world"))
+
+    # read-mode buffers over existing data are unchanged, and stay zero-copy
+    data = collect(codeunits("hello world"))
+    io = IOBuffer(data)
+    @test API.prepBody(io, false, false) == data
+
+    # an empty buffer
+    @test API.prepBody(IOBuffer(), false, false) == UInt8[]
+
+    @test API.iobufferbytes(written()) == UInt8[]
+    let io = written()
+        seek(io, 0)
+        @test String(copy(API.iobufferbytes(io))) == "hello world"
+    end
+end
+
 @testset "CloudStore.jl" begin
 @testset "S3" begin
     # conf, p = Minio.run(; debug=true)

@@ -3,15 +3,34 @@ nbytes(x::String) = filesize(x)
 nbytes(x::IOBuffer) = x.size - x.ptr + 1
 nbytes(x::IO) = eof(x) ? 0 : bytesavailable(x)
 
+"""
+    iobufferbytes(x::IOBuffer) -> AbstractVector{UInt8}
+
+Return the readable contents of `x`, i.e. the bytes in `[x.ptr, x.size]`.
+
+`x.data` is the buffer's *allocated capacity*, which for a buffer that has been written
+to extends past the data itself, so using it directly sent whatever happened to be in
+the rest of the allocation. On Julia 1.11+ `x.data` is also a `Memory`, which
+`transcode` does not accept, and slicing a `Memory` yields another `Memory`.
+
+The zero-copy path is preserved when the buffer's contents exactly fill a type the
+callers already handle.
+"""
+function iobufferbytes(x::IOBuffer)
+    lo, hi = x.ptr, x.size
+    lo > hi && return UInt8[]
+    data = x.data
+    if lo == 1 && hi == length(data) && (data isa Vector{UInt8} || data isa Base.CodeUnits{UInt8})
+        return data
+    end
+    return Vector{UInt8}(view(data, lo:hi))
+end
+
 function prepBody(x::RequestBodyType, compress::Bool, zlibng::Bool)
     if x isa String || x isa IOStream
         body = Mmap.mmap(x)
     elseif x isa IOBuffer
-        if x.ptr == 1
-            body = x.data
-        else
-            body = x.data[x.ptr:end]
-        end
+        body = iobufferbytes(x)
     elseif x isa IO
         body = read(x)
     else
