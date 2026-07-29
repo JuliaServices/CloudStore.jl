@@ -1,4 +1,5 @@
 using Test, CloudStore, CloudBase.CloudTest
+import CloudBase
 import CloudStore: S3, Blobs
 using CodecZlib
 using HTTP: ConnectError, StatusError
@@ -44,6 +45,130 @@ check(x::AbstractVector{UInt8}, y::IO) = begin; reset!(y); z = x == read(y); res
 check(x::String, y::AbstractVector{UInt8}) = read(x) == y
 check(x::IO, y::AbstractVector{UInt8}) = begin; reset!(x); z = read(x) == y; reset!(x); z end
 check(x, y) = begin; reset!(x); reset!(y); z = read(x) == read(y); reset!(x); reset!(y); z end
+
+mutable struct RecordingStore <: CloudBase.AbstractStore
+    baseurl::String
+    lock::ReentrantLock
+    parts::Dict{Int,Vector{UInt8}}
+    completed_tags::Vector{String}
+    fail_part::Union{Nothing,Int}
+end
+
+RecordingStore(; fail_part=nothing) = RecordingStore(
+    "https://recording.example/",
+    ReentrantLock(),
+    Dict{Int,Vector{UInt8}}(),
+    String[],
+    fail_part,
+)
+
+CloudStore.API.startMultipartUpload(::RecordingStore, _key; kw...) = nothing
+
+function CloudStore.API.uploadPart(store::RecordingStore, _url, part, part_number, _state; kw...)
+    part_number == store.fail_part && error("synthetic upload failure")
+    bytes = Vector{UInt8}(part)
+    lock(store.lock) do
+        store.parts[part_number] = bytes
+    end
+    return ("etag-$part_number", length(bytes))
+end
+
+function CloudStore.API.completeMultipartUpload(store::RecordingStore, _url, tags, _state; kw...)
+    store.completed_tags = copy(tags)
+    return "complete"
+end
+
+@testset "prepBody IOBuffer bounds" begin
+    API = CloudStore.API
+    # `.data` is the buffer's allocated capacity, not its contents. Only the bytes in
+    # [ptr, size] are real data; the rest of the allocation is whatever was there before.
+    written() = (io = IOBuffer(); write(io, "hello world"); io)
+
+    # a buffer written to and not rewound has nothing left to read, matching `nbytes`
+    io = written()
+    @test API.nbytes(io) == 0
+    @test API.prepBody(io, false, false) == UInt8[]
+
+    # rewound, it yields exactly the written bytes - not the padded capacity
+    io = written(); seek(io, 0)
+    body = API.prepBody(io, false, false)
+    @test length(body) == 11
+    @test String(copy(body)) == "hello world"
+    @test length(io.data) > 11   # capacity really is larger, so this is a real bound
+
+    # the read position is respected
+    io = written(); seek(io, 6)
+    @test String(copy(API.prepBody(io, false, false))) == "world"
+
+    # compression works for buffers whose data is a Memory (Julia 1.11+), which
+    # transcode does not accept directly
+    io = written(); seek(io, 0)
+    compressed = API.prepBody(io, true, false)
+    @test !isempty(compressed)
+    @test transcode(GzipDecompressor, Vector{UInt8}(compressed)) == Vector{UInt8}(codeunits("hello world"))
+
+    # read-mode buffers over existing data are unchanged, and stay zero-copy
+    data = collect(codeunits("hello world"))
+    io = IOBuffer(data)
+    @test API.prepBody(io, false, false) == data
+
+    # an empty buffer
+    @test API.prepBody(IOBuffer(), false, false) == UInt8[]
+
+    @test API.iobufferbytes(written()) == UInt8[]
+    let io = written()
+        seek(io, 0)
+        @test String(copy(API.iobufferbytes(io))) == "hello world"
+    end
+end
+
+@testset "compressed multipart upload completeness and cleanup" begin
+    API = CloudStore.API
+    # Gzip framing makes this byte pattern larger than its source. The upload must
+    # therefore emit more parts than cld(length(data), partSize).
+    data = collect(UInt8(0):UInt8(255))
+    input = IOBuffer(data)
+    store = RecordingStore()
+    obj = API.putObjectImpl(
+        store,
+        "incompressible.bin",
+        input;
+        multipartThreshold=1,
+        partSize=64,
+        batchSize=2,
+        compress=true,
+    )
+
+    uploaded = reduce(vcat, (store.parts[i] for i in sort!(collect(keys(store.parts)))))
+    @test length(uploaded) > length(data)
+    @test transcode(GzipDecompressor, uploaded) == data
+    @test length(store.parts) > cld(length(data), 64)
+    @test store.completed_tags == ["etag-$i" for i in 1:length(store.parts)]
+    @test obj.size == length(data)
+    @test isopen(input)
+
+    # A failed early part must not leave later workers blocked waiting for its tag,
+    # and cleanup must still leave caller-owned IO usable.
+    failing_input = IOBuffer(data)
+    failing_store = RecordingStore(fail_part=1)
+    err = try
+        API.putObjectImpl(
+            failing_store,
+            "failure.bin",
+            failing_input;
+            multipartThreshold=1,
+            partSize=64,
+            batchSize=2,
+            compress=true,
+        )
+        nothing
+    catch e
+        e
+    end
+    @test err !== nothing
+    @test occursin("synthetic upload failure", sprint(showerror, err))
+    @test isopen(failing_input)
+end
 
 @testset "CloudStore.jl" begin
 @testset "S3" begin
@@ -184,7 +309,7 @@ check(x, y) = begin; reset!(x); reset!(y); z = read(x) == read(y); reset!(x); re
                 end
 
                 try
-                    S3.put(bucket, "test2.csv", csv)
+                    S3.put(bucket, "test2.csv", bytes(csv))
                     @test false # Should have thrown an error
                 catch e
                     @test e isa StatusError
@@ -223,7 +348,7 @@ check(x, y) = begin; reset!(x); reset!(y); z = read(x) == read(y); reset!(x); re
                 end
 
                 try
-                    S3.put(non_existent_bucket, "doesnt_exist.csv", csv; credentials)
+                    S3.put(non_existent_bucket, "doesnt_exist.csv", bytes(csv); credentials)
                     @test false # Should have thrown an error
                 catch e
                     @test e isa ConnectError
@@ -242,7 +367,7 @@ check(x, y) = begin; reset!(x); reset!(y); z = read(x) == read(y); reset!(x); re
             end
 
             try
-                S3.put(_stale_bucket, "doesnt_exist.csv", "my,da,ta")
+                S3.put(_stale_bucket, "doesnt_exist.csv", bytes("my,da,ta"))
                 @test false # Should have thrown an error
             catch e
                 @test e isa ConnectError
@@ -398,7 +523,7 @@ end
                 end
 
                 try
-                    Blobs.put(container, "test2.csv", csv)
+                    Blobs.put(container, "test2.csv", bytes(csv))
                     @test false # Should have thrown an error
                 catch e
                     @test e isa StatusError
@@ -437,7 +562,7 @@ end
                 end
 
                 try
-                    Blobs.put(non_existent_container, "doesnt_exist.csv", csv; credentials)
+                    Blobs.put(non_existent_container, "doesnt_exist.csv", bytes(csv); credentials)
                     @test false # Should have thrown an error
                 catch e
                     @test e isa ConnectError
@@ -456,7 +581,7 @@ end
             end
 
             try
-                Blobs.put(_stale_container, "doesnt_exist.csv", "my,da,ta")
+                Blobs.put(_stale_container, "doesnt_exist.csv", bytes("my,da,ta"))
                 @test false # Should have thrown an error
             catch e
                 @test e isa ConnectError

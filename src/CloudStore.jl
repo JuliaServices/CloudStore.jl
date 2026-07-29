@@ -9,7 +9,7 @@ module API
 export Object, PrefetchedDownloadStream, ResponseBodyType, RequestBodyType,
     MultipartUploadStream
 
-using HTTP, CodecZlib, CodecZlibNG, Mmap
+using HTTP, CodecZlib, CodecZlibNG, Mmap, TranscodingStreams
 import WorkerUtilities: OrderedSynchronizer
 import CloudBase: AbstractStore
 using ExceptionUnwrapping
