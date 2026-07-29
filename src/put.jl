@@ -113,7 +113,10 @@ function putObjectImpl(x::AbstractStore, key::String, in::RequestBodyType;
     end
     # cleanup body
     if body isa compressorstream(zlibng)
-        close(body)
+        # Release the codec's C resources without calling close(body): the compressor
+        # stream wraps the *caller's* IO, and closing it closes that too, leaving the
+        # object the caller passed in unusable (an IOBuffer becomes unseekable).
+        TranscodingStreams.finalize(body.codec)
         body = body.stream
     end
     if in isa String
