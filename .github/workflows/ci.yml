@@ -37,7 +37,13 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       - uses: julia-actions/julia-buildpkg@latest
+      - name: Build documentation
+        if: github.event_name == 'pull_request'
+        run: julia --project=docs -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate(); include("docs/make.jl")'
+        env:
+          DOCUMENTER_BUILD_ONLY: "true"
       - uses: julia-actions/julia-docdeploy@latest
+        if: github.event_name != 'pull_request'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DOCUMENTER_KEY: ${{ secrets.DOCUMENTER_KEY }}

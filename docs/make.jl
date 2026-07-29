@@ -8,8 +8,10 @@ makedocs(;
     sitename="CloudStore.jl",
 )
 
-deploydocs(;
-    repo="github.com/JuliaServices/CloudStore.jl",
-    devbranch = "main",
-    push_preview = true,
-)
+if get(ENV, "DOCUMENTER_BUILD_ONLY", "false") != "true"
+    deploydocs(;
+        repo="github.com/JuliaServices/CloudStore.jl",
+        devbranch = "main",
+        push_preview = true,
+    )
+end
