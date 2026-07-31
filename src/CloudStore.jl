@@ -30,7 +30,12 @@ asArray(x::Array) = x
 asArray(x) = [x]
 
 etag(x) = strip(x, '"')
-makeURL(x::AbstractStore, key) = joinpath(x.baseurl, lstrip(key, '/'))
+
+function makeURL(x::AbstractStore, key)
+    parts = split(lstrip(key, '/'), '/'; keepempty=true)
+    escaped = join(HTTP.escapeuri.(parts), '/')
+    return joinpath(x.baseurl, escaped)
+end
 
 include("object.jl")
 

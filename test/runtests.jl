@@ -62,6 +62,18 @@ RecordingStore(; fail_part=nothing) = RecordingStore(
     fail_part,
 )
 
+@testset "object key URL encoding" begin
+    store = RecordingStore()
+    @test CloudStore.API.makeURL(store, "plain") == "https://recording.example/plain"
+    @test CloudStore.API.makeURL(store, "nested/key") == "https://recording.example/nested/key"
+    @test CloudStore.API.makeURL(store, "nested//key") == "https://recording.example/nested//key"
+    @test CloudStore.API.makeURL(store, "with space") == "https://recording.example/with%20space"
+    @test CloudStore.API.makeURL(store, "with%20space") == "https://recording.example/with%2520space"
+    @test CloudStore.API.makeURL(store, "plus+plus") == "https://recording.example/plus%2Bplus"
+    @test CloudStore.API.makeURL(store, "hash#hash") == "https://recording.example/hash%23hash"
+    @test CloudStore.API.makeURL(store, "unicode-ü") == "https://recording.example/unicode-%C3%BC"
+end
+
 CloudStore.API.startMultipartUpload(::RecordingStore, _key; kw...) = nothing
 
 function CloudStore.API.uploadPart(store::RecordingStore, _url, part, part_number, _state; kw...)
