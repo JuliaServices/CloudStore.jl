@@ -81,6 +81,13 @@ function validate_account_name(account)
     return account
 end
 
+function _validate_url_resource(resource, validate)
+    value = String(resource)
+    path = first(split(value, '?'; limit=2, keepempty=true))
+    validate(path)
+    return value
+end
+
 function _validate_azure(ok::Bool, host, account, container, blob)
     return (
         ok,
@@ -88,7 +95,7 @@ function _validate_azure(ok::Bool, host, account, container, blob)
         isnothing(host) ? nothing : replace(String(host), r"^azure"i => "http"; count=1),
         String(validate_account_name(account)),
         isnothing(container) ? "" : String(validate_container_name(container)),
-        isnothing(blob) ? "" : String(validate_blob(blob)),
+        isnothing(blob) ? "" : _validate_url_resource(blob, validate_blob),
     )
 end
 
@@ -100,7 +107,7 @@ function _validate_aws(ok::Bool, accelerate, host, bucket, region, key)
         isnothing(host) ? nothing : replace(String(host), r"^(s|S)3" => "http"; count=1),
         String(validate_bucket_name(bucket, accelerate)),
         isnothing(region) || isempty(region) ? "" : String(validate_region(region)),
-        isnothing(key) ? "" : String(validate_key(key)),
+        isnothing(key) ? "" : _validate_url_resource(key, validate_key),
     )
 end
 
@@ -183,9 +190,9 @@ function parseURLForDispatch(url, region, nowarn)
         nowarn || @warn "`region` keyword argument not provided to `CloudStore.get` and undetected from url.  Defaulting to `us-east-1`"
         region = AWS.AWS_DEFAULT_REGION
     end
-    ok && return (AWS.Bucket(bucket, region; accelerate, host), key)
+    ok && return (AWS.Bucket(bucket, region; accelerate, host), API.parsedURLResource(key))
     ok, host, account, container, blob = parseAzureAccountContainerBlob(url)
-    ok && return (Azure.Container(container, account; host), blob)
+    ok && return (Azure.Container(container, account; host), API.parsedURLResource(blob))
     # ok, bucket, object = parseGCPBucketObject(url)
     # ok && return (GCP.Bucket(bucket), object)
     error("couldn't determine cloud from string url: `$url`")

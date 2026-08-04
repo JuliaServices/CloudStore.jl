@@ -26,6 +26,21 @@ defaultBatchSize() = 4 * Threads.nthreads()
 const ResponseBodyType = Union{Nothing, AbstractVector{UInt8}, String, IO}
 const RequestBodyType = Union{AbstractVector{UInt8}, String, IO}
 
+struct ParsedURLResource
+    path::String
+    query::String
+end
+
+const Resource = Union{AbstractString,ParsedURLResource}
+
+function parsedURLResource(resource::AbstractString)
+    parts = split(String(resource), '?'; limit=2, keepempty=true)
+    return length(parts) == 1 ? only(parts) : ParsedURLResource(parts...)
+end
+
+resourceKey(resource::AbstractString) = String(resource)
+resourceKey(resource::ParsedURLResource) = resource.path
+
 asArray(x::Array) = x
 asArray(x) = [x]
 
@@ -36,6 +51,9 @@ function makeURL(x::AbstractStore, key)
     escaped = join(HTTP.escapeuri.(parts), '/')
     return joinpath(x.baseurl, escaped)
 end
+
+makeURL(x::AbstractStore, resource::ParsedURLResource) =
+    string(makeURL(x, resource.path), '?', resource.query)
 
 include("object.jl")
 
@@ -69,18 +87,18 @@ delete(x::Object; kw...) = delete(x.store, x.key; kw...)
 
 # generic methods that dispatch on store type
 list(x::AWS.Bucket; kw...) = S3.list(x; kw...)
-get(x::AWS.Bucket, key::String, out::ResponseBodyType=nothing; kw...) = S3.get(x, key, out; kw...)
-head(x::AWS.Bucket, key::String; kw...) = S3.head(x, key; kw...)
-exists(x::AWS.Bucket, key::String; kw...) = S3.exists(x, key; kw...)
-put(x::AWS.Bucket, key::String, in::RequestBodyType; kw...) = S3.put(x, key, in; kw...)
-delete(x::AWS.Bucket, key::String; kw...) = S3.delete(x, key; kw...)
+get(x::AWS.Bucket, key::API.Resource, out::ResponseBodyType=nothing; kw...) = S3.get(x, key, out; kw...)
+head(x::AWS.Bucket, key::API.Resource; kw...) = S3.head(x, key; kw...)
+exists(x::AWS.Bucket, key::API.Resource; kw...) = S3.exists(x, key; kw...)
+put(x::AWS.Bucket, key::API.Resource, in::RequestBodyType; kw...) = S3.put(x, key, in; kw...)
+delete(x::AWS.Bucket, key::API.Resource; kw...) = S3.delete(x, key; kw...)
 
 list(x::Azure.Container; kw...) = Blobs.list(x; kw...)
-get(x::Azure.Container, key::String, out::ResponseBodyType=nothing; kw...) = Blobs.get(x, key, out; kw...)
-head(x::Azure.Container, key::String; kw...) = Blobs.head(x, key; kw...)
-exists(x::Azure.Container, key::String; kw...) = Blobs.exists(x, key; kw...)
-put(x::Azure.Container, key::String, in::RequestBodyType; kw...) = Blobs.put(x, key, in; kw...)
-delete(x::Azure.Container, key::String; kw...) = Blobs.delete(x, key; kw...)
+get(x::Azure.Container, key::API.Resource, out::ResponseBodyType=nothing; kw...) = Blobs.get(x, key, out; kw...)
+head(x::Azure.Container, key::API.Resource; kw...) = Blobs.head(x, key; kw...)
+exists(x::Azure.Container, key::API.Resource; kw...) = Blobs.exists(x, key; kw...)
+put(x::Azure.Container, key::API.Resource, in::RequestBodyType; kw...) = Blobs.put(x, key, in; kw...)
+delete(x::Azure.Container, key::API.Resource; kw...) = Blobs.delete(x, key; kw...)
 
 function get(url::AbstractString, out::ResponseBodyType=nothing; region=nothing, nowarn::Bool=false, kw...)
     store, key = parseURLForDispatch(url, region, nowarn)

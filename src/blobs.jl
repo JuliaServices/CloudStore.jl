@@ -48,9 +48,9 @@ get(args...; kw...) = API.getObjectImpl(args...; kw...)
 
 API.headObject(x::Container, url, headers; kw...) = Azure.head(url; headers, kw...)
 head(x::Object; kw...) = head(x.store, x.key; credentials=x.credentials, kw...)
-head(x::Container, key::String; kw...) = API.headObjectImpl(x, key; kw...)
+head(x::Container, key::API.Resource; kw...) = API.headObjectImpl(x, key; kw...)
 exists(x::Object; kw...) = exists(x.store, x.key; credentials=x.credentials, kw...)
-exists(x::Container, key::String; kw...) = API.existsObjectImpl(x, key; kw...)
+exists(x::Container, key::API.Resource; kw...) = API.existsObjectImpl(x, key; kw...)
 
 put(args...; kw...) = API.putObjectImpl(args...; kw...)
 put(x::Object; kw...) = put(x.store, x.key; credentials=x.credentials, kw...)
@@ -71,7 +71,7 @@ function API.completeMultipartUpload(x::Container, url, eTags, uploadId; kw...)
     return API.etag(HTTP.header(resp, "ETag"))
 end
 
-delete(x::Container, key::String; kw...) = Azure.delete(API.makeURL(x, key); kw...)
+delete(x::Container, key::API.Resource; kw...) = Azure.delete(API.makeURL(x, key); kw...)
 delete(x::Object; kw...) = delete(x.store, x.key; credentials=x.credentials, kw...)
 
 for func in (:list, :get, :head, :exists, :put, :delete)
@@ -79,7 +79,8 @@ for func in (:list, :get, :head, :exists, :put, :delete)
         ok, host, account, container, blob = parseAzureAccountContainerBlob(url; parseLocal=parseLocal)
         ok || throw(ArgumentError("invalid url for Blobs.$($func): `$url`"))
         if blob !== nothing
-            return $func(Azure.Container(container, account; host), blob, args...; kw...)
+            resource = API.parsedURLResource(blob)
+            return $func(Azure.Container(container, account; host), resource, args...; kw...)
         else
             return $func(Azure.Container(container, account; host), args...; kw...)
         end
