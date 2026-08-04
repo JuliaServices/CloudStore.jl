@@ -62,6 +62,15 @@ include("parse.jl")
 # generic dispatches
 get(x::Object, out::ResponseBodyType=nothing; kw...) = get(x.store, x.key, out; kw...)
 head(x::Object; kw...) = head(x.store, x.key; kw...)
+"""
+    CloudStore.put(store, key, input; contentType=nothing, headers=HTTP.Headers(), kwargs...)
+    CloudStore.put(object, input; contentType=nothing, headers=HTTP.Headers(), kwargs...)
+    CloudStore.put(url, input; contentType=nothing, headers=HTTP.Headers(), kwargs...)
+
+Upload `input`. Set `contentType` to a MIME type such as `"text/csv"` to store it
+as the object's `Content-Type`. The setting applies to single-request and multipart
+uploads.
+"""
 put(x::Object, in::RequestBodyType; kw...) = put(x.store, x.key, in; kw...)
 delete(x::Object; kw...) = delete(x.store, x.key; kw...)
 

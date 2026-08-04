@@ -72,6 +72,8 @@ function putObjectImpl(x::AbstractStore, key::String, in::RequestBodyType;
     allowMultipart::Bool=true,
     zlibng::Bool=false,
     compress::Bool=false, credentials=nothing,
+    contentType::Union{Nothing,AbstractString}=nothing,
+    headers=HTTP.Headers(),
     lograte::Bool=false, kw...)
 
     start_time = time()
@@ -79,13 +81,15 @@ function putObjectImpl(x::AbstractStore, key::String, in::RequestBodyType;
     wbytes = Threads.Atomic{Int}(0)
     if N <= multipartThreshold || !allowMultipart
         body = prepBody(in, compress, zlibng)
-        resp = putObject(x, key, body; credentials, kw...)
+        resp = putObject(x, key, body;
+            contentType, headers=copy(headers), credentials, kw...)
         wbytes[] = get(resp.request.context, :nbytes_written, 0)
         obj = Object(x, credentials, key, N, etag(HTTP.header(resp, "ETag")))
         @goto done
     end
     # multipart upload
-    uploadState = startMultipartUpload(x, key; credentials, kw...)
+    uploadState = startMultipartUpload(x, key;
+        contentType, headers=copy(headers), credentials, kw...)
     url = makeURL(x, key)
     eTags = String[]
     body = prepBodyMultipart(in, compress, zlibng)
@@ -107,7 +111,8 @@ function putObjectImpl(x::AbstractStore, key::String, in::RequestBodyType;
             @sync for index in eachindex(parts)
                 n, part = parts[index]
                 Threads.@spawn begin
-                    results[$index] = uploadPart(x, url, $part, $n, uploadState; credentials, kw...)
+                    results[$index] = uploadPart(
+                        x, url, $part, $n, uploadState; credentials, kw...)
                 end
             end
             for (parteTag, wb) in results
@@ -123,7 +128,8 @@ function putObjectImpl(x::AbstractStore, key::String, in::RequestBodyType;
         end
         in isa String && close(body)
     end
-    eTag = completeMultipartUpload(x, url, eTags, uploadState; credentials, kw...)
+    eTag = completeMultipartUpload(x, url, eTags, uploadState;
+        contentType, headers=copy(headers), credentials, kw...)
     obj = Object(x, credentials, key, N, eTag)
 @label done
     end_time = time()
