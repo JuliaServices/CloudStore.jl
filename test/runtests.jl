@@ -2,8 +2,9 @@ using Test, CloudStore, CloudBase.CloudTest
 import CloudBase
 import CloudStore: S3, Blobs
 using CodecZlib
+import HTTP
 using HTTP: ConnectError, StatusError
-using Sockets: DNSError
+using Sockets: DNSError, IPv4, listenany
 using ExceptionUnwrapping: unwrap_exception
 
 bytes(x) = codeunits(x)
@@ -72,6 +73,40 @@ RecordingStore(; fail_part=nothing) = RecordingStore(
     @test CloudStore.API.makeURL(store, "plus+plus") == "https://recording.example/plus%2Bplus"
     @test CloudStore.API.makeURL(store, "hash#hash") == "https://recording.example/hash%23hash"
     @test CloudStore.API.makeURL(store, "unicode-ü") == "https://recording.example/unicode-%C3%BC"
+    @test CloudStore.API.makeURL(store, "literal?mark") == "https://recording.example/literal%3Fmark"
+    signed = CloudStore.API.parsedURLResource("key?X-Amz-Signature=a%2Fb&partNumber=1")
+    @test CloudStore.API.makeURL(store, signed) ==
+        "https://recording.example/key?X-Amz-Signature=a%2Fb&partNumber=1"
+end
+
+@testset "signed URL request targets" begin
+    port, socket = listenany(IPv4(0), 20_000)
+    close(socket)
+    targets = Channel{String}(2)
+    server = HTTP.serve!(port; verbose=false) do request
+        put!(targets, request.target)
+        return HTTP.Response(200, ["Content-Length" => "2"], "ok")
+    end
+    try
+        s3_query = "X-Amz-Signature=a%2Fb&X-Amz-SignedHeaders=host"
+        @test S3.get(
+            "http://127.0.0.1:$port/bucket-name/key?$s3_query";
+            parseLocal=true,
+            nowarn=true,
+            allowMultipart=false,
+        ) == b"ok"
+        @test take!(targets) == "/bucket-name/key?$s3_query"
+
+        azure_query = "sv=2023-11-03&sig=c%2Fd&sp=r"
+        @test Blobs.get(
+            "azure://127.0.0.1:$port/account/container/blob?$azure_query";
+            parseLocal=true,
+            allowMultipart=false,
+        ) == b"ok"
+        @test take!(targets) == "/account/container/blob?$azure_query"
+    finally
+        close(server)
+    end
 end
 
 CloudStore.API.startMultipartUpload(::RecordingStore, _key; kw...) = nothing
@@ -634,6 +669,13 @@ end
         @test blob == parts[5]
     end
 
+
+    azure_sas = "?sp=r&sig=$("a"^1500)"
+    ok, host, account, container, blob = CloudStore.parseAzureAccountContainerBlob(
+        "https://myaccount.blob.core.windows.net/mycontainer/myblob$azure_sas")
+    @test (ok, host, account, container, blob) ==
+        (true, nothing, "myaccount", "mycontainer", "myblob$azure_sas")
+
     s3 = [
         ("https://bucket-name.s3-accelerate.us-east-1.amazonaws.com/key-name", (true, true, nothing, "bucket-name", "us-east-1", "key-name")),
         ("https://bucket-name.s3-accelerate.us-east-1.amazonaws.com", (true, true, nothing, "bucket-name", "us-east-1", "")),
@@ -681,6 +723,13 @@ end
         @test reg == parts[5]
         @test key == parts[6]
     end
+
+
+    aws_query = "?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=$("b"^1500)"
+    ok, accelerate, host, bucket, reg, key = CloudStore.parseAWSBucketRegionKey(
+        "https://bucket-name.s3.us-east-1.amazonaws.com/key-name$aws_query")
+    @test (ok, accelerate, host, bucket, reg, key) ==
+        (true, false, nothing, "bucket-name", "us-east-1", "key-name$aws_query")
 
     # Only accept https, not http
     invalid_azure = [

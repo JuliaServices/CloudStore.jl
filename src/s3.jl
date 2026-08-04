@@ -34,7 +34,7 @@ get(args...; kw...) = API.getObjectImpl(args...; kw...)
 
 API.headObject(x::Bucket, url, headers; kw...) = AWS.head(url; headers, service="s3", kw...)
 head(x::Object; kw...) = head(x.store, x.key; credentials=x.credentials, kw...)
-head(x::Bucket, key::String; kw...) = API.headObjectImpl(x, key; kw...)
+head(x::Bucket, key::API.Resource; kw...) = API.headObjectImpl(x, key; kw...)
 
 put(args...; kw...) = API.putObjectImpl(args...; kw...)
 put(x::Object; kw...) = put(x.store, x.key; credentials=x.credentials, kw...)
@@ -57,7 +57,7 @@ function API.completeMultipartUpload(x::Bucket, url, eTags, uploadId; kw...)
     return API.etag(HTTP.header(resp, "ETag"))
 end
 
-delete(x::Bucket, key; kw...) = AWS.delete(API.makeURL(x, key); service="s3", kw...)
+delete(x::Bucket, key::API.Resource; kw...) = AWS.delete(API.makeURL(x, key); service="s3", kw...)
 delete(x::Object; kw...) = delete(x.store, x.key; credentials=x.credentials, kw...)
 
 for func in (:list, :get, :head, :put, :delete)
@@ -69,7 +69,8 @@ for func in (:list, :get, :head, :put, :delete)
             region = AWS.AWS_DEFAULT_REGION
         end
         if key !== nothing
-            return $func(S3.Bucket(bucket, region; accelerate, host), key, args...; kw...)
+            resource = API.parsedURLResource(key)
+            return $func(S3.Bucket(bucket, region; accelerate, host), resource, args...; kw...)
         else
             return $func(S3.Bucket(bucket, region; accelerate, host), args...; kw...)
         end

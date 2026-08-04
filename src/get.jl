@@ -22,7 +22,7 @@ function listObjectsImpl(x::AbstractStore;
     return contents
 end
 
-function headObjectImpl(x::AbstractStore, key::String;
+function headObjectImpl(x::AbstractStore, key::Resource;
     multipartThreshold::Int=MULTIPART_THRESHOLD,
     allowMultipart::Bool=true,
     headers=HTTP.Headers(), kw...)
@@ -95,7 +95,7 @@ function _check_buffer_too_small_exception(@nospecialize(e::Exception))
     return e
 end
 
-function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType=nothing;
+function getObjectImpl(x::AbstractStore, key::Resource, out::ResponseBodyType=nothing;
     multipartThreshold::Int=MULTIPART_THRESHOLD,
     partSize::Int=MULTIPART_SIZE,
     batchSize::Int=defaultBatchSize(),
