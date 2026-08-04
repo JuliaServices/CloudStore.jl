@@ -55,19 +55,29 @@ exists(x::Container, key::API.Resource; kw...) = API.existsObjectImpl(x, key; kw
 put(args...; kw...) = API.putObjectImpl(args...; kw...)
 put(x::Object; kw...) = put(x.store, x.key; credentials=x.credentials, kw...)
 
-API.putObject(x::Container, key, body; kw...) = Azure.put(API.makeURL(x, key), ["x-ms-blob-type" => "BlockBlob"], body; kw...)
+function API.putObject(x::Container, key, body;
+    contentType=nothing, headers=HTTP.Headers(), kw...)
+    HTTP.setheader(headers, "x-ms-blob-type" => "BlockBlob")
+    contentType === nothing || HTTP.setheader(headers, "Content-Type" => String(contentType))
+    return Azure.put(API.makeURL(x, key), headers, body; kw...)
+end
 
-API.startMultipartUpload(x::Container, key; kw...) = nothing
+API.startMultipartUpload(x::Container, key;
+    contentType=nothing, headers=HTTP.Headers(), kw...) = nothing
 
 function API.uploadPart(x::Container, url, part, partNumber, uploadId; kw...)
     blockid = base64encode(lpad(partNumber - 1, 64, '0'))
-    resp = Azure.put(url, [], part; query=Dict("comp" => "block", "blockid" => blockid), kw...)
+    resp = Azure.put(url, [], part;
+        query=Dict("comp" => "block", "blockid" => blockid), kw...)
     return (blockid, Base.get(resp.request.context, :nbytes_written, 0))
 end
 
-function API.completeMultipartUpload(x::Container, url, eTags, uploadId; kw...)
+function API.completeMultipartUpload(x::Container, url, eTags, uploadId;
+    contentType=nothing, headers=HTTP.Headers(), kw...)
+    contentType === nothing || HTTP.setheader(
+        headers, "x-ms-blob-content-type" => String(contentType))
     body = XMLDict.node_xml("BlockList", Dict("Latest" => eTags))
-    resp = Azure.put(url; query=Dict("comp" => "blocklist"), body, kw...)
+    resp = Azure.put(url, headers, body; query=Dict("comp" => "blocklist"), kw...)
     return API.etag(HTTP.header(resp, "ETag"))
 end
 

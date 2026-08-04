@@ -10,6 +10,13 @@ using ExceptionUnwrapping: unwrap_exception
 
 bytes(x) = codeunits(x)
 
+function header_value(headers, name)
+    for (key, value) in headers
+        lowercase(key) == lowercase(name) && return value
+    end
+    return ""
+end
+
 function stringfile(x)
     path, io = mktemp()
     write(io, x)
@@ -360,7 +367,7 @@ end
                 body = inBody(csv)
                 out = outType(csv, outBody)
                 println("in: $inBody, out: $outBody, single part, no compression")
-                obj = S3.put(bucket, "test.csv", body; credentials)
+                obj = S3.put(bucket, "test.csv", body; contentType="text/csv", credentials)
                 data = S3.get(bucket, "test.csv", out; objectMaxSize=sizeof(csv), credentials)
                 @test check(body, data)
                 resetOut!(out)
@@ -371,6 +378,7 @@ end
                 # object metadata
                 meta = S3.head(bucket, "test.csv"; credentials)
                 @test meta isa Dict && !isempty(meta)
+                @test header_value(meta, "Content-Type") == "text/csv"
 
                 # list
                 objs = S3.list(bucket; credentials)
@@ -409,9 +417,11 @@ end
                 mbody = inBody(multicsv);
                 out = outType(multicsv, outBody)
                 println("in: $inBody, out: $outBody, multipart, no compression")
-                obj = S3.put(bucket, "test3.csv", mbody; multipartThreshold=5_000_000, partSize=5_500_000, lograte=true, credentials)
+                obj = S3.put(bucket, "test3.csv", mbody; contentType="text/csv", multipartThreshold=5_000_000, partSize=5_500_000, lograte=true, credentials)
                 data = S3.get(bucket, "test3.csv", out; objectMaxSize=sizeof(multicsv), lograte=true, credentials)
                 @test check(mbody, data)
+                meta = S3.head(bucket, "test3.csv"; credentials)
+                @test header_value(meta, "Content-Type") == "text/csv"
                 resetOut!(out)
                 println("in: $inBody, out: $outBody, multipart, compression")
                 obj = S3.put(bucket, "test4.csv", mbody; compress=true, zlibng=true, multipartThreshold=5_000_000, partSize=5_500_000, credentials)
@@ -566,7 +576,7 @@ end
                 body = inBody(csv)
                 out = outType(csv, outBody)
                 println("in: $inBody, out: $outBody, single part, no compression")
-                obj = Blobs.put(container, "test.csv", body; credentials)
+                obj = Blobs.put(container, "test.csv", body; contentType="text/csv", credentials)
                 data = Blobs.get(container, "test.csv", out; credentials)
                 @test check(body, data)
                 resetOut!(out)
@@ -577,6 +587,7 @@ end
                 # object metadata
                 meta = Blobs.head(container, "test.csv"; credentials)
                 @test meta isa Dict && !isempty(meta)
+                @test header_value(meta, "Content-Type") == "text/csv"
 
                 # list
                 objs = Blobs.list(container; credentials)
@@ -616,9 +627,11 @@ end
                 mbody = inBody(multicsv);
                 out = outType(multicsv, outBody)
                 println("in: $inBody, out: $outBody, multipart, no compression")
-                obj = Blobs.put(container, "test3.csv", mbody; multipartThreshold=5_000_000, partSize=5_500_000, credentials)
+                obj = Blobs.put(container, "test3.csv", mbody; contentType="text/csv", multipartThreshold=5_000_000, partSize=5_500_000, credentials)
                 data = Blobs.get(container, "test3.csv", out; credentials)
                 @test check(mbody, data)
+                meta = Blobs.head(container, "test3.csv"; credentials)
+                @test header_value(meta, "Content-Type") == "text/csv"
                 resetOut!(out)
                 println("in: $inBody, out: $outBody, multipart, compression")
                 obj = Blobs.put(container, "test4.csv", mbody; compress=true, multipartThreshold=5_000_000, partSize=5_500_000, credentials)

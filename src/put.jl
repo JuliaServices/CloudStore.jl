@@ -73,6 +73,8 @@ function putObjectImpl(x::AbstractStore, key::Resource, in::RequestBodyType;
     zlibng::Bool=false,
     compress::Bool=false, credentials=nothing,
     progress=nothing,
+    contentType::Union{Nothing,AbstractString}=nothing,
+    headers=HTTP.Headers(),
     lograte::Bool=false, kw...)
 
     start_time = time()
@@ -81,13 +83,15 @@ function putObjectImpl(x::AbstractStore, key::Resource, in::RequestBodyType;
     progressReported = false
     if N <= multipartThreshold || !allowMultipart
         body = prepBody(in, compress, zlibng)
-        resp = putObject(x, key, body; credentials, kw...)
+        resp = putObject(x, key, body;
+            contentType, headers=copy(headers), credentials, kw...)
         wbytes[] = get(resp.request.context, :nbytes_written, 0)
         obj = Object(x, credentials, resourceKey(key), N, etag(HTTP.header(resp, "ETag")))
         @goto done
     end
     # multipart upload
-    uploadState = startMultipartUpload(x, key; credentials, kw...)
+    uploadState = startMultipartUpload(x, key;
+        contentType, headers=copy(headers), credentials, kw...)
     url = makeURL(x, key)
     eTags = String[]
     local eTag
@@ -111,7 +115,8 @@ function putObjectImpl(x::AbstractStore, key::Resource, in::RequestBodyType;
                 @sync for index in eachindex(parts)
                     n, part = parts[index]
                     Threads.@spawn begin
-                        results[$index] = uploadPart(x, url, $part, $n, uploadState; credentials, kw...)
+                        results[$index] = uploadPart(
+                            x, url, $part, $n, uploadState; credentials, kw...)
                     end
                 end
                 for (parteTag, wb) in results
@@ -131,7 +136,8 @@ function putObjectImpl(x::AbstractStore, key::Resource, in::RequestBodyType;
             end
             in isa String && close(body)
         end
-        eTag = completeMultipartUpload(x, url, eTags, uploadState; credentials, kw...)
+        eTag = completeMultipartUpload(x, url, eTags, uploadState;
+            contentType, headers=copy(headers), credentials, kw...)
     catch
         try
             abortMultipartUpload(x, url, uploadState; credentials, kw...)

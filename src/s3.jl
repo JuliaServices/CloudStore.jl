@@ -41,19 +41,28 @@ exists(x::Bucket, key::API.Resource; kw...) = API.existsObjectImpl(x, key; kw...
 put(args...; kw...) = API.putObjectImpl(args...; kw...)
 put(x::Object; kw...) = put(x.store, x.key; credentials=x.credentials, kw...)
 
-API.putObject(x::Bucket, key, body; kw...) = AWS.put(API.makeURL(x, key), [], body; service="s3", kw...)
+function API.putObject(x::Bucket, key, body;
+    contentType=nothing, headers=HTTP.Headers(), kw...)
+    contentType === nothing || HTTP.setheader(headers, "Content-Type" => String(contentType))
+    return AWS.put(API.makeURL(x, key), headers, body; service="s3", kw...)
+end
 
-function API.startMultipartUpload(x::Bucket, key; kw...)
-    resp = AWS.post(API.makeURL(x, key); query=Dict("uploads" => ""), service="s3", retry_non_idempotent=true, kw...)
+function API.startMultipartUpload(x::Bucket, key;
+    contentType=nothing, headers=HTTP.Headers(), kw...)
+    contentType === nothing || HTTP.setheader(headers, "Content-Type" => String(contentType))
+    resp = AWS.post(API.makeURL(x, key), headers;
+        query=Dict("uploads" => ""), service="s3", retry_non_idempotent=true, kw...)
     return xml_dict(String(resp.body))["InitiateMultipartUploadResult"]["UploadId"]
 end
 
 function API.uploadPart(x::Bucket, url, part, partNumber, uploadId; kw...)
-    resp = AWS.put(url, [], part; query=Dict("partNumber" => string(partNumber), "uploadId" => uploadId), service="s3", kw...)
+    resp = AWS.put(url, [], part;
+        query=Dict("partNumber" => string(partNumber), "uploadId" => uploadId), service="s3", kw...)
     return (HTTP.header(resp, "ETag"), Base.get(resp.request.context, :nbytes_written, 0))
 end
 
-function API.completeMultipartUpload(x::Bucket, url, eTags, uploadId; kw...)
+function API.completeMultipartUpload(x::Bucket, url, eTags, uploadId;
+    contentType=nothing, headers=HTTP.Headers(), kw...)
     body = XMLDict.node_xml("CompleteMultipartUpload", Dict("Part" => [Dict("PartNumber" => string(i), "ETag" => eTag) for (i, eTag) in enumerate(eTags)]))
     resp = AWS.post(url; query=Dict("uploadId" => uploadId), body, service="s3", kw...)
     return API.etag(HTTP.header(resp, "ETag"))
