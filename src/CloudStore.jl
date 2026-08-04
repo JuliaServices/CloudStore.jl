@@ -46,6 +46,7 @@ function continuationToken end
 function listObjects end
 function getObject end
 function headObject end
+function existsObject end
 include("get.jl")
 function putObject end
 function startMultipartUpload end
@@ -62,6 +63,7 @@ include("parse.jl")
 # generic dispatches
 get(x::Object, out::ResponseBodyType=nothing; kw...) = get(x.store, x.key, out; kw...)
 head(x::Object; kw...) = head(x.store, x.key; kw...)
+exists(x::Object; kw...) = exists(x.store, x.key; kw...)
 put(x::Object, in::RequestBodyType; kw...) = put(x.store, x.key, in; kw...)
 delete(x::Object; kw...) = delete(x.store, x.key; kw...)
 
@@ -69,12 +71,14 @@ delete(x::Object; kw...) = delete(x.store, x.key; kw...)
 list(x::AWS.Bucket; kw...) = S3.list(x; kw...)
 get(x::AWS.Bucket, key::String, out::ResponseBodyType=nothing; kw...) = S3.get(x, key, out; kw...)
 head(x::AWS.Bucket, key::String; kw...) = S3.head(x, key; kw...)
+exists(x::AWS.Bucket, key::String; kw...) = S3.exists(x, key; kw...)
 put(x::AWS.Bucket, key::String, in::RequestBodyType; kw...) = S3.put(x, key, in; kw...)
 delete(x::AWS.Bucket, key::String; kw...) = S3.delete(x, key; kw...)
 
 list(x::Azure.Container; kw...) = Blobs.list(x; kw...)
 get(x::Azure.Container, key::String, out::ResponseBodyType=nothing; kw...) = Blobs.get(x, key, out; kw...)
 head(x::Azure.Container, key::String; kw...) = Blobs.head(x, key; kw...)
+exists(x::Azure.Container, key::String; kw...) = Blobs.exists(x, key; kw...)
 put(x::Azure.Container, key::String, in::RequestBodyType; kw...) = Blobs.put(x, key, in; kw...)
 delete(x::Azure.Container, key::String; kw...) = Blobs.delete(x, key; kw...)
 
@@ -86,6 +90,20 @@ end
 function head(url::AbstractString; region=nothing, nowarn::Bool=false, kw...)
     store, key = parseURLForDispatch(url, region, nowarn)
     return head(store, key; kw...)
+end
+
+"""
+    CloudStore.exists(store, key; kwargs...) -> Bool
+    CloudStore.exists(object; kwargs...) -> Bool
+    CloudStore.exists(url; kwargs...) -> Bool
+
+Return `true` when the object exists. Return `false` only when the provider returns
+HTTP 404. Other HTTP errors are rethrown so that authentication and service failures
+are not reported as missing objects.
+"""
+function exists(url::AbstractString; region=nothing, nowarn::Bool=false, kw...)
+    store, key = parseURLForDispatch(url, region, nowarn)
+    return exists(store, key; kw...)
 end
 
 function put(url::AbstractString, in::RequestBodyType; region=nothing, nowarn::Bool=false, kw...)

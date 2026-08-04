@@ -35,6 +35,8 @@ get(args...; kw...) = API.getObjectImpl(args...; kw...)
 API.headObject(x::Bucket, url, headers; kw...) = AWS.head(url; headers, service="s3", kw...)
 head(x::Object; kw...) = head(x.store, x.key; credentials=x.credentials, kw...)
 head(x::Bucket, key::String; kw...) = API.headObjectImpl(x, key; kw...)
+exists(x::Object; kw...) = exists(x.store, x.key; credentials=x.credentials, kw...)
+exists(x::Bucket, key::String; kw...) = API.existsObjectImpl(x, key; kw...)
 
 put(args...; kw...) = API.putObjectImpl(args...; kw...)
 put(x::Object; kw...) = put(x.store, x.key; credentials=x.credentials, kw...)
@@ -60,7 +62,7 @@ end
 delete(x::Bucket, key; kw...) = AWS.delete(API.makeURL(x, key); service="s3", kw...)
 delete(x::Object; kw...) = delete(x.store, x.key; credentials=x.credentials, kw...)
 
-for func in (:list, :get, :head, :put, :delete)
+for func in (:list, :get, :head, :exists, :put, :delete)
     @eval function $func(url::AbstractString, args...; region=nothing, nowarn::Bool=false, parseLocal::Bool=false, kw...)
         ok, accelerate, host, bucket, reg, key = parseAWSBucketRegionKey(url; parseLocal=parseLocal)
         ok || throw(ArgumentError("invalid url for S3.$($func): `$url`"))
