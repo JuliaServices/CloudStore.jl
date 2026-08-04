@@ -104,6 +104,7 @@ function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType=noth
     decompress::Bool=false,
     zlibng::Bool=false,
     headers=HTTP.Headers(),
+    progress=nothing,
     lograte::Bool=false, kw...)
 
     # if user provided a buffer or signalled the max object size is < multipartThreshold
@@ -134,6 +135,7 @@ function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType=noth
     end
     # for tracking bitrate per second of overall download
     nbytes = Threads.Atomic{Int}(0)
+    progressReported = false
 
     # if the user doesn't want multipart or we know from objectMaxSize or length(out) that we're
     # < multipartThreshold, then we'll just do a single GET request, handle that case first since
@@ -235,6 +237,10 @@ function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType=noth
                 end
             end
         end
+        if progress !== nothing
+            progress(contentLength, nbytes[])
+            progressReported = true
+        end
     end
 
 @label done
@@ -256,6 +262,9 @@ function getObjectImpl(x::AbstractStore, key::String, out::ResponseBodyType=noth
     end
     end_time = time()
     bytes = nbytes[]
+    if progress !== nothing && !progressReported
+        progress(bytes, bytes)
+    end
     gbits_per_second = bytes == 0 ? 0 : (((8 * bytes) / 1e9) / (end_time - start_time))
     lograte && @info "CloudStore.get complete with bandwidth: $(gbits_per_second) Gbps"
     return res
