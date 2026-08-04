@@ -386,22 +386,25 @@ function _upload_task(io; kw...)
     try
         (part_n, upload_buffer) = take!(io.upload_queue)
         # upload the part
-        parteTag, wb = uploadPart(io.store, io.url, upload_buffer, part_n, io.uploadState; io.credentials, kw...)
-        Base.release(io.sem)
+        parteTag, _ = uploadPart(io.store, io.url, upload_buffer, part_n, io.uploadState; io.credentials, kw...)
         # add part eTag to our collection of eTags
         Base.@lock io.cond_wait begin
             if length(io.eTags) < part_n
                 resize!(io.eTags, part_n)
             end
             io.eTags[part_n] = parteTag
-            io.ntasks -= 1
-            notify(io.cond_wait)
         end
     catch e
         isopen(io.upload_queue) && close(io.upload_queue, e)
         Base.@lock io.cond_wait begin
             io.exc = e
-            notify(io.cond_wait, e, all=true, error=true)
+            notify(io.cond_wait, all=true)
+        end
+    finally
+        Base.release(io.sem)
+        Base.@lock io.cond_wait begin
+            io.ntasks -= 1
+            notify(io.cond_wait, all=true)
         end
     end
     return nothing
@@ -477,6 +480,8 @@ mutable struct MultipartUploadStream{T <: AbstractStore} <: IO
     ntasks::Int
     exc::Union{Exception, Nothing}
     sem::Base.Semaphore
+    closed::Bool
+    aborted::Bool
 
     function MultipartUploadStream(
         store::AWS.Bucket,
@@ -485,6 +490,8 @@ mutable struct MultipartUploadStream{T <: AbstractStore} <: IO
         concurrent_writes_to_channel::Int=(4 * Threads.nthreads()),
         kw...
     )
+        concurrent_writes_to_channel > 0 || throw(ArgumentError(
+            "`concurrent_writes_to_channel` must be positive"))
         url = makeURL(store, key)
         uploadState = API.startMultipartUpload(store, key; credentials, kw...)
         io = new{AWS.Bucket}(
@@ -498,7 +505,9 @@ mutable struct MultipartUploadStream{T <: AbstractStore} <: IO
             0,
             0,
             nothing,
-            Base.Semaphore(concurrent_writes_to_channel)
+            Base.Semaphore(concurrent_writes_to_channel),
+            false,
+            false,
         )
         return io
     end
@@ -510,6 +519,8 @@ mutable struct MultipartUploadStream{T <: AbstractStore} <: IO
         concurrent_writes_to_channel::Int=(4 * Threads.nthreads()),
         kw...
     )
+        concurrent_writes_to_channel > 0 || throw(ArgumentError(
+            "`concurrent_writes_to_channel` must be positive"))
         url = makeURL(store, key)
         uploadState = API.startMultipartUpload(store, key; credentials, kw...)
         io = new{Azure.Container}(
@@ -523,7 +534,9 @@ mutable struct MultipartUploadStream{T <: AbstractStore} <: IO
             0,
             0,
             nothing,
-            Base.Semaphore(concurrent_writes_to_channel)
+            Base.Semaphore(concurrent_writes_to_channel),
+            false,
+            false,
         )
         return io
     end
@@ -535,11 +548,15 @@ mutable struct MultipartUploadStream{T <: AbstractStore} <: IO
         io = MultipartUploadStream(args...; kw...)
         try
             f(io)
-            wait(io)
             close(io; kw...)
-        catch e
-            # todo, we need a function here to signal abort to S3/Blobs. We don't have that
-            # yet in CloudStore.jl
+        catch
+            if !io.closed && !io.aborted
+                try
+                    abort(io; kw...)
+                catch abort_exception
+                    @warn "Failed to abort multipart upload" exception=(abort_exception, catch_backtrace())
+                end
+            end
             rethrow()
         end
     end
@@ -547,43 +564,99 @@ end
 
 # Writes a data chunk to the channel and spawn
 function Base.write(io::MultipartUploadStream, bytes::Vector{UInt8}; kw...)
-    local part_n
-    Base.@lock io.cond_wait begin
-        io.ntasks += 1
-        io.cur_part_id += 1
-        part_n = io.cur_part_id
-        notify(io.cond_wait)
-    end
+    isopen(io) || throw(InvalidStateException("multipart upload is closed", :closed))
     Base.acquire(io.sem)
-    # We expect the data chunks to be written in order in the channel.
-    put!(io.upload_queue, (part_n, bytes))
-    Threads.@spawn _upload_task($io; $(kw)...)
+    local part_n
+    registered = false
+    try
+        Base.@lock io.cond_wait begin
+            isopen(io) || throw(InvalidStateException(
+                "multipart upload is closed", :closed))
+            isnothing(io.exc) || throw(io.exc)
+            io.ntasks += 1
+            io.cur_part_id += 1
+            part_n = io.cur_part_id
+            registered = true
+            notify(io.cond_wait)
+        end
+        # We expect the data chunks to be written in order in the channel.
+        put!(io.upload_queue, (part_n, bytes))
+        Threads.@spawn _upload_task($io; $(kw)...)
+    catch
+        Base.release(io.sem)
+        if registered
+            Base.@lock io.cond_wait begin
+                io.ntasks -= 1
+                notify(io.cond_wait, all=true)
+            end
+        end
+        rethrow()
+    end
     return nothing
 end
 
 # Waits for all parts to be uploaded
 function Base.wait(io::MultipartUploadStream)
-    try
-        Base.@lock io.cond_wait begin
-            while true
-                !isnothing(io.exc) && throw(io.exc)
-                io.ntasks == 0 && break
-                wait(io.cond_wait)
-            end
+    Base.@lock io.cond_wait begin
+        while io.ntasks != 0
+            wait(io.cond_wait)
         end
-    catch e
-        rethrow()
+        isnothing(io.exc) || throw(io.exc)
     end
+    return nothing
 end
+
+function _wait_for_upload_tasks(io::MultipartUploadStream)
+    Base.@lock io.cond_wait begin
+        while io.ntasks != 0
+            wait(io.cond_wait)
+        end
+    end
+    return nothing
+end
+
+"""
+    CloudStore.abort(io::MultipartUploadStream; kwargs...)
+
+Wait for active part requests, then abort the multipart upload. S3 removes the
+uploaded parts immediately. Azure has no matching abort request and removes
+uncommitted blocks after its service retention period.
+"""
+function abort(io::MultipartUploadStream; credentials=io.credentials, kw...)
+    Base.@lock io.cond_wait begin
+        io.closed && return nothing
+        io.aborted && return nothing
+        # Change state under the writer lock so no new part can register.
+        io.aborted = true
+    end
+    isopen(io.upload_queue) && close(io.upload_queue)
+    _wait_for_upload_tasks(io)
+    return API.abortMultipartUpload(
+        io.store, io.url, io.uploadState; credentials, kw...)
+end
+
+Base.isopen(io::MultipartUploadStream) =
+    !io.closed && !io.aborted && isopen(io.upload_queue)
 
 # When there are no more data chunks to upload, this function closes the channel and sends
 # a POST request with a single id for the entire upload.
-function Base.close(io::MultipartUploadStream; kw...)
+function Base.close(io::MultipartUploadStream; credentials=io.credentials, kw...)
+    io.closed && return nothing
+    io.aborted && throw(InvalidStateException("multipart upload was aborted", :closed))
     try
-        close(io.upload_queue)
-        return API.completeMultipartUpload(io.store, io.url, io.eTags, io.uploadState; kw...)
+        isopen(io.upload_queue) && close(io.upload_queue)
+        wait(io)
+        result = API.completeMultipartUpload(
+            io.store, io.url, io.eTags, io.uploadState; credentials, kw...)
+        io.closed = true
+        return result
     catch e
         io.exc = e
+        try
+            abort(io; credentials, kw...)
+        catch abort_exception
+            @warn "Failed to abort multipart upload" exception=(abort_exception, catch_backtrace())
+        end
         rethrow()
     end
 end

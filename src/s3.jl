@@ -59,6 +59,11 @@ function API.completeMultipartUpload(x::Bucket, url, eTags, uploadId; kw...)
     return API.etag(HTTP.header(resp, "ETag"))
 end
 
+function API.abortMultipartUpload(x::Bucket, url, uploadId; kw...)
+    return AWS.delete(url;
+        query=Dict("uploadId" => uploadId), service="s3", kw...)
+end
+
 delete(x::Bucket, key::API.Resource; kw...) = AWS.delete(API.makeURL(x, key); service="s3", kw...)
 delete(x::Object; kw...) = delete(x.store, x.key; credentials=x.credentials, kw...)
 

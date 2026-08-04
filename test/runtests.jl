@@ -54,6 +54,7 @@ mutable struct RecordingStore <: CloudBase.AbstractStore
     parts::Dict{Int,Vector{UInt8}}
     completed_tags::Vector{String}
     fail_part::Union{Nothing,Int}
+    aborted::Bool
 end
 
 RecordingStore(; fail_part=nothing) = RecordingStore(
@@ -62,6 +63,7 @@ RecordingStore(; fail_part=nothing) = RecordingStore(
     Dict{Int,Vector{UInt8}}(),
     String[],
     fail_part,
+    false,
 )
 
 struct RecordingDownloadStore <: CloudBase.AbstractStore
@@ -208,6 +210,11 @@ function CloudStore.API.completeMultipartUpload(store::RecordingStore, _url, tag
     return "complete"
 end
 
+function CloudStore.API.abortMultipartUpload(store::RecordingStore, _url, _state; kw...)
+    store.aborted = true
+    return nothing
+end
+
 @testset "transfer progress callbacks" begin
     data = collect(UInt8(1):UInt8(10))
     download_updates = Tuple{Int,Int}[]
@@ -314,6 +321,7 @@ end
     @test store.completed_tags == ["etag-$i" for i in 1:length(store.parts)]
     @test obj.size == length(data)
     @test isopen(input)
+    @test !store.aborted
 
     # A failed early part must not leave later workers blocked waiting for its tag,
     # and cleanup must still leave caller-owned IO usable.
@@ -336,6 +344,7 @@ end
     @test err !== nothing
     @test occursin("synthetic upload failure", sprint(showerror, err))
     @test isopen(failing_input)
+    @test failing_store.aborted
 end
 
 @testset "CloudStore.jl" begin
@@ -1363,6 +1372,24 @@ end
         CloudStore.close(mus_obj; credentials)
         obj = CloudStore.Object(bucket, "test.csv"; credentials)
         @test length(obj) == sizeof(multicsv)
+    end
+end
+
+@testset "CloudStore.MultipartUploadStream abort - S3" begin
+    Minio.with(; debug=true) do conf
+        credentials, bucket = conf
+        @test_throws ArgumentError CloudStore.MultipartUploadStream(
+            bucket, "invalid.bin"; credentials, concurrent_writes_to_channel=0)
+
+        io = CloudStore.MultipartUploadStream(bucket, "aborted.bin"; credentials)
+        write(io, fill(0x2a, 5_500_000))
+        wait(io)
+        CloudStore.abort(io; credentials)
+
+        @test io.aborted
+        @test !isopen(io)
+        @test_throws InvalidStateException write(io, UInt8[0x01])
+        @test_throws StatusError S3.head(bucket, "aborted.bin"; credentials)
     end
 end
 

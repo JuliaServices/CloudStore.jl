@@ -71,6 +71,10 @@ function API.completeMultipartUpload(x::Container, url, eTags, uploadId; kw...)
     return API.etag(HTTP.header(resp, "ETag"))
 end
 
+# Azure Blob Storage has no abort operation for uncommitted blocks. The service
+# removes them automatically after its retention period.
+API.abortMultipartUpload(x::Container, url, uploadId; kw...) = nothing
+
 delete(x::Container, key::API.Resource; kw...) = Azure.delete(API.makeURL(x, key); kw...)
 delete(x::Object; kw...) = delete(x.store, x.key; credentials=x.credentials, kw...)
 

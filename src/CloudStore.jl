@@ -7,7 +7,7 @@ import CloudBase: AWS, Azure, CloudTest
 module API
 
 export Object, PrefetchedDownloadStream, ResponseBodyType, RequestBodyType,
-    MultipartUploadStream
+    MultipartUploadStream, abort
 
 using HTTP, CodecZlib, CodecZlibNG, Mmap, TranscodingStreams
 import WorkerUtilities: OrderedSynchronizer
@@ -70,6 +70,7 @@ function putObject end
 function startMultipartUpload end
 function uploadPart end
 function completeMultipartUpload end
+function abortMultipartUpload end
 include("put.jl")
 
 end # module API
