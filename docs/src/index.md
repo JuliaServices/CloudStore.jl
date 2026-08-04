@@ -1,54 +1,84 @@
-# CloudStore.jl Documentation
+# CloudStore.jl
 
-GitHub Repo: [https://github.com/JuliaServices/CloudStore.jl](https://github.com/JuliaServices/CloudStore.jl)
+CloudStore.jl provides one object-storage interface for Amazon S3 and Azure Blob Storage.
+It supports object listing, upload, download, metadata, deletion, parallel transfers, and
+streaming transfers.
 
-Welcome to CloudStore.jl! A simple, yet comprehensive foundation for interacting with common cloud providers in Julia (GCP, Azure, AWS).
+CloudStore uses [CloudBase.jl](https://github.com/JuliaServices/CloudBase.jl) for credentials
+and signed HTTP requests. It does not create buckets, containers, or other cloud resources.
 
 ## Installation
 
-You can install CloudStore by typing the following in the Julia REPL:
+Install CloudStore from the General registry:
+
 ```julia
-] add CloudStore 
+using Pkg
+Pkg.add("CloudStore")
 ```
 
-followed by 
+Load the package and the provider namespace that you need:
+
 ```julia
 using CloudStore
+
+const S3 = CloudStore.S3
+const Blobs = CloudStore.Blobs
 ```
-to load the package.
 
-## Overview 
+CloudStore keeps its public names inside the package namespace. It does not add common names
+such as `get`, `put`, or `delete` to your session.
 
-The CloudStore.jl package provides a set of foundational functionality for interacting with the most common
-cloud providers (GCP, Azure, and AWS). It specifically aims to *do* the following:
-  * Handle common credential scenarios, including the following in order of precedence:
-    * Allow manually provided credentials by user
-    * Loading credentials from cloud-idiomatic environment variables
-    * Loading credentials from cloud-idiomatic config/credential files
-    * Inspecting current host environment for additional credential options (EC2, ECS task, etc.)
-  * Handles automatic refresh attempts of credentials when they are close to expiring
-  * Provides custom HTTP.jl clients that includes layers to set appropriate default keyword arguments
-    for specific cloud configurations and handles request "signing" according to cloud-specific algorithms
+## Create a store
 
-The package specifically *does not* aim to do any of the following:
-  * Cloud-specific error handling/parsing for specific codes/problems
-  * URL/header/query parameter/request body validation of arguments for specific cloud service operations
-
-The core of the package then, is in 3 *non*-exported modules (that you can import yourself if so desired):
-  * `CloudStore.AWS`: provides `AWS.get`, `AWS.put`, `AWS.post`, `AWS.request` etc. as wrappers to corresponding `HTTP` methods
-  * `CloudStore.Azure`: provides `Azure.get`, `Azure.put`, `Azure.post`, `Azure.request` etc. as wrappers to corresponding `HTTP` methods
-  * `CloudStore.GCP`: provides `GCP.get`, `GCP.put`, `GCP.post`, `GCP.request` etc. as wrappers to corresponding `HTTP` methods
-
-That means *using* this packages behavior is basically like dropping in a cloud-specific module call in place
-of where you would have been calling HTTP.jl, like:
+Create an S3 bucket handle with its name and region:
 
 ```julia
-import CloudStore: AWS
-
-function get_file(url, creds)
-    # previously tried to do manual header auth signing manually or something and then call HTTP.get
-    # now can just call AWS.get w/ creds and it will do the request signing automatically
-    # right before the request is sent on the wire
-    return AWS.get(url; service="S3", region="us-west-1", access_key_id=creds.id, secret_access_key=creds.secret)
-end
+bucket = S3.Bucket("my-bucket", "us-west-2")
 ```
+
+Create an Azure container handle with its container name and storage account:
+
+```julia
+container = Blobs.Container("my-container", "mystorageaccount")
+```
+
+These constructors do not send a network request. They only create a handle for later
+operations.
+
+## Credentials
+
+CloudStore accepts `credentials` as a keyword argument. CloudBase can also load credentials
+from the standard environment, configuration files, and cloud-host metadata services.
+
+```julia
+data = CloudStore.get(bucket, "reports/today.csv"; credentials)
+```
+
+Do not put long-lived secrets in source code. Use your cloud provider's standard credential
+chain when possible.
+
+## Choose an interface
+
+The generic interface dispatches from the store type:
+
+```julia
+CloudStore.put(bucket, "hello.txt", codeunits("hello"))
+CloudStore.get(bucket, "hello.txt")
+```
+
+The provider namespaces offer the same operations:
+
+```julia
+S3.put(bucket, "hello.txt", codeunits("hello"))
+Blobs.put(container, "hello.txt", codeunits("hello"))
+```
+
+You can also use an S3 or Azure object URL. Provide `region` for an S3 URL when the URL does
+not contain it.
+
+```julia
+CloudStore.get("s3://my-bucket/reports/today.csv"; region="us-west-2")
+CloudStore.get("https://mystorageaccount.blob.core.windows.net/my-container/data.csv")
+```
+
+See [Object operations](@ref) for the complete transfer workflow.

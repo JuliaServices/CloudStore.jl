@@ -3,6 +3,15 @@ import CloudBase: AbstractStore, CloudCredentials, AWS, Azure
 const DEFAULT_PREFETCH_SIZE = 32 * 1024 * 1024
 const DEFAULT_PREFETCH_MULTIPART_SIZE = 8 * 1024 * 1024
 
+"""
+    CloudStore.Object(store, key; credentials=nothing, kwargs...)
+
+A remote object in an S3 bucket or Azure Blob container.
+
+Constructing an `Object` from a store and key sends a metadata request. Upload and list
+operations also return `Object` values. The fields include `store`, `credentials`, `key`,
+`size`, `eTag`, and provider-specific `properties`.
+"""
 struct Object{T <: AbstractStore}
     store::T
     credentials::Union{Nothing, AWS.Credentials, Azure.Credentials}
@@ -171,7 +180,7 @@ The number of spawned tasks is also governed by these two parameters, with appro
 `prefetch_size` / `prefetch_multipart_size` tasks spawned for performing the GET requests
 (defaults to 4 if those fields aren't specified) + 1 task is spawned to coordinate the
 prefetching process. Number of spawned tasks is upper-bounded by the size of the input and
-the number of threads available (see [`_ndownload_tasks`](@ref) helper function).
+the number of threads available (see the internal `_ndownload_tasks` helper function).
 
 **Reading from this stream is not thread-safe**.
 
