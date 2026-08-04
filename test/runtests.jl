@@ -64,6 +64,49 @@ RecordingStore(; fail_part=nothing) = RecordingStore(
     fail_part,
 )
 
+struct RecordingDownloadStore <: CloudBase.AbstractStore
+    baseurl::String
+    data::Vector{UInt8}
+end
+
+RecordingDownloadStore(data) = RecordingDownloadStore(
+    "https://recording.example/", Vector{UInt8}(data))
+
+function CloudStore.API.headObject(store::RecordingDownloadStore, url, _headers; kw...)
+    request = HTTP.Request("HEAD", url)
+    return HTTP.Response(
+        200,
+        ["Content-Length" => string(length(store.data))],
+        UInt8[];
+        request,
+    )
+end
+
+function CloudStore.API.getObject(
+    store::RecordingDownloadStore,
+    url,
+    headers;
+    response_stream=nothing,
+    kw...,
+)
+    range = HTTP.header(headers, "Range", "bytes=0-$(length(store.data) - 1)")
+    match_result = match(r"bytes=(\d+)-(\d+)", range)
+    first_byte = parse(Int, match_result[1]) + 1
+    last_byte = parse(Int, match_result[2]) + 1
+    part = store.data[first_byte:last_byte]
+    if response_stream !== nothing
+        copyto!(response_stream, part)
+    end
+    request = HTTP.Request("GET", url)
+    request.context[:nbytes] = length(part)
+    return HTTP.Response(
+        206,
+        ["Content-Length" => string(length(part))],
+        response_stream === nothing ? part : response_stream;
+        request,
+    )
+end
+
 @testset "object key URL encoding" begin
     store = RecordingStore()
     @test CloudStore.API.makeURL(store, "plain") == "https://recording.example/plain"
@@ -163,6 +206,44 @@ end
 function CloudStore.API.completeMultipartUpload(store::RecordingStore, _url, tags, _state; kw...)
     store.completed_tags = copy(tags)
     return "complete"
+end
+
+@testset "transfer progress callbacks" begin
+    data = collect(UInt8(1):UInt8(10))
+    download_updates = Tuple{Int,Int}[]
+    result = CloudStore.API.getObjectImpl(
+        RecordingDownloadStore(data),
+        "data.bin";
+        multipartThreshold=1,
+        partSize=4,
+        batchSize=2,
+        progress=(total, transferred) -> push!(download_updates, (total, transferred)),
+    )
+    @test result == data
+    @test download_updates == [(10, 8), (10, 10)]
+
+    single_updates = Tuple{Int,Int}[]
+    result = CloudStore.API.getObjectImpl(
+        RecordingDownloadStore(data),
+        "data.bin";
+        allowMultipart=false,
+        progress=(total, transferred) -> push!(single_updates, (total, transferred)),
+    )
+    @test result == data
+    @test single_updates == [(10, 10)]
+
+    upload_data = collect(UInt8(1):UInt8(16))
+    upload_updates = Tuple{Int,Int}[]
+    CloudStore.API.putObjectImpl(
+        RecordingStore(),
+        "data.bin",
+        upload_data;
+        multipartThreshold=1,
+        partSize=4,
+        batchSize=2,
+        progress=(total, transferred) -> push!(upload_updates, (total, transferred)),
+    )
+    @test upload_updates == [(16, 4), (16, 8), (16, 12), (16, 16)]
 end
 
 @testset "prepBody IOBuffer bounds" begin
