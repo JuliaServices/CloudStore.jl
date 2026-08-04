@@ -3,15 +3,34 @@ nbytes(x::String) = filesize(x)
 nbytes(x::IOBuffer) = x.size - x.ptr + 1
 nbytes(x::IO) = eof(x) ? 0 : bytesavailable(x)
 
+"""
+    iobufferbytes(x::IOBuffer) -> AbstractVector{UInt8}
+
+Return the readable contents of `x`, i.e. the bytes in `[x.ptr, x.size]`.
+
+`x.data` is the buffer's *allocated capacity*, which for a buffer that has been written
+to extends past the data itself, so using it directly sent whatever happened to be in
+the rest of the allocation. On Julia 1.11+ `x.data` is also a `Memory`, which
+`transcode` does not accept, and slicing a `Memory` yields another `Memory`.
+
+The zero-copy path is preserved when the buffer's contents exactly fill a type the
+callers already handle.
+"""
+function iobufferbytes(x::IOBuffer)
+    lo, hi = x.ptr, x.size
+    lo > hi && return UInt8[]
+    data = x.data
+    if lo == 1 && hi == length(data) && (data isa Vector{UInt8} || data isa Base.CodeUnits{UInt8})
+        return data
+    end
+    return Vector{UInt8}(view(data, lo:hi))
+end
+
 function prepBody(x::RequestBodyType, compress::Bool, zlibng::Bool)
     if x isa String || x isa IOStream
         body = Mmap.mmap(x)
     elseif x isa IOBuffer
-        if x.ptr == 1
-            body = x.data
-        else
-            body = x.data[x.ptr:end]
-        end
+        body = iobufferbytes(x)
     elseif x isa IO
         body = read(x)
     else
@@ -29,7 +48,7 @@ function prepBodyMultipart(x::RequestBodyType, compress::Bool, zlibng::Bool)
         @assert x isa IO
         body = x
     end
-    return compress ? compressorstream(zlibng)(body) : body
+    return compress ? compressorstream(zlibng)(body; stop_on_end=true) : body
 end
 
 _read(body, n) = read(body, n)
@@ -69,36 +88,40 @@ function putObjectImpl(x::AbstractStore, key::String, in::RequestBodyType;
     uploadState = startMultipartUpload(x, key; credentials, kw...)
     url = makeURL(x, key)
     eTags = String[]
-    sync = OrderedSynchronizer(1)
     body = prepBodyMultipart(in, compress, zlibng)
-    nTasks = cld(N, partSize)
-    nLoops = cld(nTasks, batchSize)
-    # while nLoops * batchSize is the *max* # of iterations we'll do
-    # if we're compressing, it will likely be much fewer, so we add
-    # eof(body) checks to both loops to account for earlier termination
-    for j = 1:nLoops
-        @sync for i = 1:batchSize
-            eof(body) && break
-            n = (j - 1) * batchSize + i
-            part = _read(body, partSize)
-            Threads.@spawn begin
-                _n = $n
-                parteTag, wb = uploadPart(x, url, $part, _n, uploadState; credentials, kw...)
+    partNumber = 0
+    try
+        # Compression can make incompressible input larger than its source, so the
+        # source byte count cannot safely bound the number of output parts.
+        while !eof(body)
+            parts = Tuple{Int,Any}[]
+            for _ = 1:batchSize
+                eof(body) && break
+                part = _read(body, partSize)
+                isempty(part) && break
+                partNumber += 1
+                push!(parts, (partNumber, part))
+            end
+            isempty(parts) && break
+            results = Vector{Tuple{String,Int}}(undef, length(parts))
+            @sync for index in eachindex(parts)
+                n, part = parts[index]
+                Threads.@spawn begin
+                    results[$index] = uploadPart(x, url, $part, $n, uploadState; credentials, kw...)
+                end
+            end
+            for (parteTag, wb) in results
+                push!(eTags, parteTag)
                 Threads.atomic_add!(wbytes, wb)
-                # we synchronize the eTags here because the order matters
-                # for the final call to completeMultipartUpload
-                put!(() -> push!(eTags, parteTag), sync, _n)
             end
         end
-        eof(body) && break
-    end
-    # cleanup body
-    if body isa compressorstream(zlibng)
-        close(body)
-        body = body.stream
-    end
-    if in isa String
-        close(body)
+    finally
+        if body isa compressorstream(zlibng)
+            wrapped = body.stream
+            close(body)
+            body = wrapped
+        end
+        in isa String && close(body)
     end
     eTag = completeMultipartUpload(x, url, eTags, uploadState; credentials, kw...)
     obj = Object(x, credentials, key, N, eTag)

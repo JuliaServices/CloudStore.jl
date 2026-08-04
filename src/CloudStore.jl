@@ -9,7 +9,7 @@ module API
 export Object, PrefetchedDownloadStream, ResponseBodyType, RequestBodyType,
     MultipartUploadStream
 
-using HTTP, CodecZlib, CodecZlibNG, Mmap
+using HTTP, CodecZlib, CodecZlibNG, Mmap, TranscodingStreams
 import WorkerUtilities: OrderedSynchronizer
 import CloudBase: AbstractStore
 using ExceptionUnwrapping
@@ -30,7 +30,12 @@ asArray(x::Array) = x
 asArray(x) = [x]
 
 etag(x) = strip(x, '"')
-makeURL(x::AbstractStore, key) = joinpath(x.baseurl, lstrip(key, '/'))
+
+function makeURL(x::AbstractStore, key)
+    parts = split(lstrip(key, '/'), '/'; keepempty=true)
+    escaped = join(HTTP.escapeuri.(parts), '/')
+    return joinpath(x.baseurl, escaped)
+end
 
 include("object.jl")
 
