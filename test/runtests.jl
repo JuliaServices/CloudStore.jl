@@ -2,6 +2,8 @@ using Test, CloudStore, CloudBase.CloudTest
 import CloudBase
 import CloudStore: S3, Blobs
 using CodecZlib
+import HTTP
+import Sockets
 using HTTP: ConnectError, StatusError
 using Sockets: DNSError
 using ExceptionUnwrapping: unwrap_exception
@@ -72,6 +74,34 @@ RecordingStore(; fail_part=nothing) = RecordingStore(
     @test CloudStore.API.makeURL(store, "plus+plus") == "https://recording.example/plus%2Bplus"
     @test CloudStore.API.makeURL(store, "hash#hash") == "https://recording.example/hash%23hash"
     @test CloudStore.API.makeURL(store, "unicode-ü") == "https://recording.example/unicode-%C3%BC"
+end
+
+@testset "object existence" begin
+    port, socket = Sockets.listenany(Sockets.IPv4(0), 20_000)
+    close(socket)
+    server = HTTP.serve!(port; verbose=false) do request
+        status = endswith(request.target, "/present") ? 200 :
+            endswith(request.target, "/missing") ? 404 : 403
+        return HTTP.Response(status)
+    end
+    try
+        bucket = S3.Bucket("bucket-name", "us-east-1"; host="http://127.0.0.1:$port")
+        @test S3.exists(bucket, "present")
+        @test !S3.exists(bucket, "missing")
+        @test_throws StatusError S3.exists(bucket, "forbidden")
+        @test CloudStore.exists(bucket, "present")
+
+        container = Blobs.Container("container", "account"; host="http://127.0.0.1:$port")
+        @test Blobs.exists(container, "present")
+        @test !Blobs.exists(container, "missing")
+        @test_throws StatusError Blobs.exists(container, "forbidden")
+        @test CloudStore.exists(container, "present")
+
+        object = CloudStore.Object(bucket, nothing, "present", 0, "")
+        @test CloudStore.exists(object)
+    finally
+        close(server)
+    end
 end
 
 CloudStore.API.startMultipartUpload(::RecordingStore, _key; kw...) = nothing

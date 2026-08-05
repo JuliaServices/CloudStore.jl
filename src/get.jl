@@ -33,6 +33,16 @@ function headObjectImpl(x::AbstractStore, key::String;
     return Dict(headObject(x, url, headers; kw...).headers)
 end
 
+function existsObjectImpl(x::AbstractStore, key::String;
+    headers=HTTP.Headers(), kw...)
+    url = makeURL(x, key)
+    request_kw = merge((; kw...), (; status_exception=false))
+    resp = headObject(x, url, headers; request_kw...)
+    resp.status == 404 && return false
+    200 <= resp.status < 300 && return true
+    throw(HTTP.StatusError(resp.status, resp.request.method, resp.request.target, resp))
+end
+
 # Content-Range: bytes 0-9/443
 contentRange(rng) = "Range" => "bytes=$(first(rng))-$(last(rng))"
 
