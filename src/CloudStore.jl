@@ -79,9 +79,24 @@ using .API
 include("parse.jl")
 
 # generic dispatches
+"""
+    CloudStore.get(source[, output]; progress=nothing, kwargs...)
+
+Download an object. When `progress` is a function, call it as
+`progress(total_bytes, transferred_bytes)` after completed transfer batches. This
+matches the callback order used by `Downloads.download`.
+"""
 get(x::Object, out::ResponseBodyType=nothing; kw...) = get(x.store, x.key, out; kw...)
 head(x::Object; kw...) = head(x.store, x.key; kw...)
 exists(x::Object; kw...) = exists(x.store, x.key; kw...)
+"""
+    CloudStore.put(destination, input; progress=nothing, kwargs...)
+
+Upload an object. When `progress` is a function, call it as
+`progress(total_bytes, transferred_bytes)` after completed transfer batches. For a
+compressed multipart upload, `total_bytes` is `0` because the final wire size is not
+known before compression finishes.
+"""
 put(x::Object, in::RequestBodyType; kw...) = put(x.store, x.key, in; kw...)
 delete(x::Object; kw...) = delete(x.store, x.key; kw...)
 

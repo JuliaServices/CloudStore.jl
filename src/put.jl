@@ -72,11 +72,13 @@ function putObjectImpl(x::AbstractStore, key::Resource, in::RequestBodyType;
     allowMultipart::Bool=true,
     zlibng::Bool=false,
     compress::Bool=false, credentials=nothing,
+    progress=nothing,
     lograte::Bool=false, kw...)
 
     start_time = time()
     N = nbytes(in)
     wbytes = Threads.Atomic{Int}(0)
+    progressReported = false
     if N <= multipartThreshold || !allowMultipart
         body = prepBody(in, compress, zlibng)
         resp = putObject(x, key, body; credentials, kw...)
@@ -113,6 +115,10 @@ function putObjectImpl(x::AbstractStore, key::Resource, in::RequestBodyType;
             for (parteTag, wb) in results
                 push!(eTags, parteTag)
                 Threads.atomic_add!(wbytes, wb)
+                if progress !== nothing
+                    progress(compress ? 0 : N, wbytes[])
+                    progressReported = true
+                end
             end
         end
     finally
@@ -128,6 +134,9 @@ function putObjectImpl(x::AbstractStore, key::Resource, in::RequestBodyType;
 @label done
     end_time = time()
     bytes = wbytes[]
+    if progress !== nothing && !progressReported
+        progress(bytes, bytes)
+    end
     gbits_per_second = bytes == 0 ? 0 : (((8 * bytes) / 1e9) / (end_time - start_time))
     lograte && @info "CloudStore.put complete with bandwidth: $(gbits_per_second) Gbps"
     return obj
