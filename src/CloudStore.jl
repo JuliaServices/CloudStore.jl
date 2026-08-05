@@ -91,9 +91,15 @@ get(x::Object, out::ResponseBodyType=nothing; kw...) = get(x.store, x.key, out; 
 head(x::Object; kw...) = head(x.store, x.key; kw...)
 exists(x::Object; kw...) = exists(x.store, x.key; kw...)
 """
-    CloudStore.put(destination, input; progress=nothing, kwargs...)
+    CloudStore.put(store, key, input; contentType=nothing, headers=HTTP.Headers(), progress=nothing, kwargs...)
+    CloudStore.put(object, input; contentType=nothing, headers=HTTP.Headers(), progress=nothing, kwargs...)
+    CloudStore.put(url, input; contentType=nothing, headers=HTTP.Headers(), progress=nothing, kwargs...)
 
-Upload an object. When `progress` is a function, call it as
+Upload `input`. Set `contentType` to a MIME type such as `"text/csv"` to store it
+as the object's `Content-Type`. The setting applies to single-request and multipart
+uploads.
+
+When `progress` is a function, call it as
 `progress(total_bytes, transferred_bytes)` after completed transfer batches. For a
 compressed multipart upload, `total_bytes` is `0` because the final wire size is not
 known before compression finishes.
