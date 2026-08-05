@@ -65,7 +65,7 @@ end
 compressorstream(zlibng) = zlibng ? CodecZlibNG.GzipCompressorStream : CodecZlib.GzipCompressorStream
 compressor(zlibng) = zlibng ? CodecZlibNG.GzipCompressor : CodecZlib.GzipCompressor
 
-function putObjectImpl(x::AbstractStore, key::String, in::RequestBodyType;
+function putObjectImpl(x::AbstractStore, key::Resource, in::RequestBodyType;
     multipartThreshold::Int=MULTIPART_THRESHOLD,
     partSize::Int=MULTIPART_SIZE,
     batchSize::Int=defaultBatchSize(),
@@ -81,7 +81,7 @@ function putObjectImpl(x::AbstractStore, key::String, in::RequestBodyType;
         body = prepBody(in, compress, zlibng)
         resp = putObject(x, key, body; credentials, kw...)
         wbytes[] = get(resp.request.context, :nbytes_written, 0)
-        obj = Object(x, credentials, key, N, etag(HTTP.header(resp, "ETag")))
+        obj = Object(x, credentials, resourceKey(key), N, etag(HTTP.header(resp, "ETag")))
         @goto done
     end
     # multipart upload
@@ -124,7 +124,7 @@ function putObjectImpl(x::AbstractStore, key::String, in::RequestBodyType;
         in isa String && close(body)
     end
     eTag = completeMultipartUpload(x, url, eTags, uploadState; credentials, kw...)
-    obj = Object(x, credentials, key, N, eTag)
+    obj = Object(x, credentials, resourceKey(key), N, eTag)
 @label done
     end_time = time()
     bytes = wbytes[]
