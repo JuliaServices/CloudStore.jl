@@ -2,12 +2,12 @@
 # CloudStore
 
 [![CI](https://github.com/JuliaServices/CloudStore.jl/workflows/CI/badge.svg)](https://github.com/JuliaServices/CloudStore.jl/actions?query=workflow%3ACI)
-[![codecov](https://codecov.io/gh/JuliaServices/CloudStore.jl/branch/master/graph/badge.svg)](https://codecov.io/gh/JuliaServices/CloudStore.jl)
+[![codecov](https://codecov.io/gh/JuliaServices/CloudStore.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/JuliaServices/CloudStore.jl)
 [![deps](https://juliahub.com/docs/CloudStore/deps.svg)](https://juliahub.com/ui/Packages/CloudStore/HHBkp?t=2)
 [![version](https://juliahub.com/docs/CloudStore/version.svg)](https://juliahub.com/ui/Packages/CloudStore/HHBkp)
 [![pkgeval](https://juliahub.com/docs/CloudStore/pkgeval.svg)](https://juliahub.com/ui/Packages/CloudStore/HHBkp)
 
-*A simple, consistent, and performant API for interacting with common cloud storage abstractions in Julia (GCP, Azure Blob Storage, AWS S3)*
+*A simple, consistent, and performant API for Amazon S3 and Azure Blob Storage in Julia.*
 
 ## Installation
 
@@ -34,9 +34,9 @@ Contributions are very welcome, as are feature requests and suggestions. Please 
 [docs-stable-url]: https://juliaservices.github.io/CloudStore.jl/stable
 
 [ci-img]: https://github.com/JuliaServices/CloudStore.jl/workflows/CI/badge.svg
-[ci-url]: https://github.com/JuliaServices/CloudStore.jl/actions?query=workflow%3ACI+branch%3Amaster
+[ci-url]: https://github.com/JuliaServices/CloudStore.jl/actions?query=workflow%3ACI+branch%3Amain
 
-[codecov-img]: https://codecov.io/gh/JuliaServices/CloudStore.jl/branch/master/graph/badge.svg
+[codecov-img]: https://codecov.io/gh/JuliaServices/CloudStore.jl/branch/main/graph/badge.svg
 [codecov-url]: https://codecov.io/gh/JuliaServices/CloudStore.jl
 
 [issues-url]: https://github.com/JuliaServices/CloudStore.jl/issues
