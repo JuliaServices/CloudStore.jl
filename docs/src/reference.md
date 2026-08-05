@@ -24,4 +24,5 @@ CloudStore.Object
 ```@docs
 CloudStore.PrefetchedDownloadStream
 CloudStore.MultipartUploadStream
+CloudStore.abort
 ```

@@ -90,46 +90,56 @@ function putObjectImpl(x::AbstractStore, key::Resource, in::RequestBodyType;
     uploadState = startMultipartUpload(x, key; credentials, kw...)
     url = makeURL(x, key)
     eTags = String[]
-    body = prepBodyMultipart(in, compress, zlibng)
-    partNumber = 0
+    local eTag
     try
-        # Compression can make incompressible input larger than its source, so the
-        # source byte count cannot safely bound the number of output parts.
-        while !eof(body)
-            parts = Tuple{Int,Any}[]
-            for _ = 1:batchSize
-                eof(body) && break
-                part = _read(body, partSize)
-                isempty(part) && break
-                partNumber += 1
-                push!(parts, (partNumber, part))
-            end
-            isempty(parts) && break
-            results = Vector{Tuple{String,Int}}(undef, length(parts))
-            @sync for index in eachindex(parts)
-                n, part = parts[index]
-                Threads.@spawn begin
-                    results[$index] = uploadPart(x, url, $part, $n, uploadState; credentials, kw...)
+        body = prepBodyMultipart(in, compress, zlibng)
+        partNumber = 0
+        try
+            # Compression can make incompressible input larger than its source, so the
+            # source byte count cannot safely bound the number of output parts.
+            while !eof(body)
+                parts = Tuple{Int,Any}[]
+                for _ = 1:batchSize
+                    eof(body) && break
+                    part = _read(body, partSize)
+                    isempty(part) && break
+                    partNumber += 1
+                    push!(parts, (partNumber, part))
+                end
+                isempty(parts) && break
+                results = Vector{Tuple{String,Int}}(undef, length(parts))
+                @sync for index in eachindex(parts)
+                    n, part = parts[index]
+                    Threads.@spawn begin
+                        results[$index] = uploadPart(x, url, $part, $n, uploadState; credentials, kw...)
+                    end
+                end
+                for (parteTag, wb) in results
+                    push!(eTags, parteTag)
+                    Threads.atomic_add!(wbytes, wb)
+                    if progress !== nothing
+                        progress(compress ? 0 : N, wbytes[])
+                        progressReported = true
+                    end
                 end
             end
-            for (parteTag, wb) in results
-                push!(eTags, parteTag)
-                Threads.atomic_add!(wbytes, wb)
-                if progress !== nothing
-                    progress(compress ? 0 : N, wbytes[])
-                    progressReported = true
-                end
+        finally
+            if body isa compressorstream(zlibng)
+                wrapped = body.stream
+                close(body)
+                body = wrapped
             end
+            in isa String && close(body)
         end
-    finally
-        if body isa compressorstream(zlibng)
-            wrapped = body.stream
-            close(body)
-            body = wrapped
+        eTag = completeMultipartUpload(x, url, eTags, uploadState; credentials, kw...)
+    catch
+        try
+            abortMultipartUpload(x, url, uploadState; credentials, kw...)
+        catch abort_exception
+            @warn "Failed to abort multipart upload" exception=(abort_exception, catch_backtrace())
         end
-        in isa String && close(body)
+        rethrow()
     end
-    eTag = completeMultipartUpload(x, url, eTags, uploadState; credentials, kw...)
     obj = Object(x, credentials, resourceKey(key), N, eTag)
 @label done
     end_time = time()
