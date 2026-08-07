@@ -61,7 +61,7 @@ function is_dns_error(e, depth::Int=0)
     if isdefined(HTTP, :DNSError) && e isa getproperty(HTTP, :DNSError)
         return true
     end
-    for field in (:error, :cause, :err)
+    for field in (:error, :cause, :err, :ex)
         hasproperty(e, field) || continue
         inner = getproperty(e, field)
         inner === e && continue
