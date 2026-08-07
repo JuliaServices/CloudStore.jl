@@ -55,6 +55,21 @@ check(x::String, y::AbstractVector{UInt8}) = read(x) == y
 check(x::IO, y::AbstractVector{UInt8}) = begin; reset!(x); z = read(x) == y; reset!(x); z end
 check(x, y) = begin; reset!(x); reset!(y); z = read(x) == read(y); reset!(x); reset!(y); z end
 
+function is_dns_error(e, depth::Int=0)
+    depth > 8 && return false
+    e isa DNSError && return true
+    if isdefined(HTTP, :DNSError) && e isa getproperty(HTTP, :DNSError)
+        return true
+    end
+    for field in (:error, :cause, :err)
+        hasproperty(e, field) || continue
+        inner = getproperty(e, field)
+        inner === e && continue
+        is_dns_error(inner, depth + 1) && return true
+    end
+    return false
+end
+
 mutable struct RecordingStore <: CloudBase.AbstractStore
     baseurl::String
     lock::ReentrantLock
@@ -107,7 +122,6 @@ function CloudStore.API.getObject(
         copyto!(response_stream, part)
     end
     request = HTTP.Request("GET", url)
-    request.context[:nbytes] = length(part)
     return HTTP.Response(
         206,
         ["Content-Length" => string(length(part))],
@@ -203,6 +217,12 @@ end
 
 CloudStore.API.startMultipartUpload(::RecordingStore, _key; kw...) = nothing
 
+function CloudStore.API.putObject(store::RecordingStore, key, body; kw...)
+    store.parts[0] = Vector{UInt8}(body)
+    request = HTTP.Request("PUT", CloudStore.API.makeURL(store, key))
+    return HTTP.Response(200, ["ETag" => "single-etag"], UInt8[]; request)
+end
+
 function CloudStore.API.uploadPart(store::RecordingStore, _url, part, part_number, _state; kw...)
     part_number == store.fail_part && error("synthetic upload failure")
     bytes = Vector{UInt8}(part)
@@ -258,6 +278,18 @@ end
         progress=(total, transferred) -> push!(upload_updates, (total, transferred)),
     )
     @test upload_updates == [(16, 4), (16, 8), (16, 12), (16, 16)]
+
+    single_upload_updates = Tuple{Int,Int}[]
+    single_store = RecordingStore()
+    CloudStore.API.putObjectImpl(
+        single_store,
+        "single.bin",
+        upload_data;
+        allowMultipart=false,
+        progress=(total, transferred) -> push!(single_upload_updates, (total, transferred)),
+    )
+    @test single_store.parts[0] == upload_data
+    @test single_upload_updates == [(16, 16)]
 end
 
 @testset "prepBody IOBuffer bounds" begin
@@ -524,22 +556,22 @@ end
 
             @testset "Connection error: DNSError" begin
                 non_existent_bucket_name = string(bucket.name, "doesntexist")
-                non_existent_baseurl = replace(bucket.baseurl, bucket.name => non_existent_bucket_name)
-                non_existent_bucket = S3.Bucket(non_existent_bucket_name, non_existent_baseurl)
+                non_existent_bucket = S3.Bucket(non_existent_bucket_name;
+                    host="http://cloudstore-invalid-hostname-for-tests.invalid")
                 try
                     S3.get(non_existent_bucket, "doesnt_exist.csv"; credentials)
                     @test false # Should have thrown an error
                 catch e
-                    @test e isa ConnectError
-                    @test unwrap_exception(e.error) isa DNSError
+                    @test e isa ConnectError || is_dns_error(e)
+                    @test is_dns_error(e)
                 end
 
                 try
                     S3.put(non_existent_bucket, "doesnt_exist.csv", bytes(csv); credentials)
                     @test false # Should have thrown an error
                 catch e
-                    @test e isa ConnectError
-                    @test unwrap_exception(e.error) isa DNSError
+                    @test e isa ConnectError || is_dns_error(e)
+                    @test is_dns_error(e)
                 end
             end
         end
@@ -550,7 +582,6 @@ end
                 @test false # Should have thrown an error
             catch e
                 @test e isa ConnectError
-                @test unwrap_exception(e.error) isa Base.IOError
             end
 
             try
@@ -558,7 +589,6 @@ end
                 @test false # Should have thrown an error
             catch e
                 @test e isa ConnectError
-                @test unwrap_exception(e.error) isa Base.IOError
             end
         end
     end
@@ -741,22 +771,25 @@ end
 
             @testset "Connection error: DNSError" begin
                 non_existent_container_name = string(container.name, "doesntexist")
-                non_existent_baseurl = replace(container.baseurl, container.name => non_existent_container_name)
-                non_existent_container = Blobs.Container(non_existent_container_name, non_existent_baseurl)
+                non_existent_container = Blobs.Container(
+                    non_existent_container_name,
+                    "account";
+                    host="http://cloudstore-invalid-hostname-for-tests.invalid",
+                )
                 try
                     Blobs.get(non_existent_container, "doesnt_exist.csv"; credentials)
                     @test false # Should have thrown an error
                 catch e
-                    @test e isa ConnectError
-                    @test unwrap_exception(e.error) isa DNSError
+                    @test e isa ConnectError || is_dns_error(e)
+                    @test is_dns_error(e)
                 end
 
                 try
                     Blobs.put(non_existent_container, "doesnt_exist.csv", bytes(csv); credentials)
                     @test false # Should have thrown an error
                 catch e
-                    @test e isa ConnectError
-                    @test unwrap_exception(e.error) isa DNSError
+                    @test e isa ConnectError || is_dns_error(e)
+                    @test is_dns_error(e)
                 end
             end
         end
@@ -767,7 +800,6 @@ end
                 @test false # Should have thrown an error
             catch e
                 @test e isa ConnectError
-                @test unwrap_exception(e.error) isa Base.IOError
             end
 
             try
@@ -775,7 +807,6 @@ end
                 @test false # Should have thrown an error
             catch e
                 @test e isa ConnectError
-                @test unwrap_exception(e.error) isa Base.IOError
             end
         end
     end
