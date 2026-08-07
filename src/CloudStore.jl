@@ -45,6 +45,14 @@ asArray(x::Array) = x
 asArray(x) = [x]
 
 etag(x) = strip(x, '"')
+is_redirect_response(resp) = resp.status in (301, 302, 303, 307, 308)
+
+function status_error(resp)
+    if applicable(HTTP.StatusError, resp)
+        return HTTP.StatusError(resp)
+    end
+    return HTTP.StatusError(resp.status, resp.request.method, resp.request.target, resp)
+end
 
 function makeURL(x::AbstractStore, key)
     parts = split(lstrip(key, '/'), '/'; keepempty=true)

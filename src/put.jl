@@ -83,9 +83,10 @@ function putObjectImpl(x::AbstractStore, key::Resource, in::RequestBodyType;
     progressReported = false
     if N <= multipartThreshold || !allowMultipart
         body = prepBody(in, compress, zlibng)
+        wire_bytes = nbytes(body)
         resp = putObject(x, key, body;
             contentType, headers=copy(headers), credentials, kw...)
-        wbytes[] = get(resp.request.context, :nbytes_written, 0)
+        wbytes[] = wire_bytes
         obj = Object(x, credentials, resourceKey(key), N, etag(HTTP.header(resp, "ETag")))
         @goto done
     end

@@ -40,7 +40,7 @@ function existsObjectImpl(x::AbstractStore, key::Resource;
     resp = headObject(x, url, headers; request_kw...)
     resp.status == 404 && return false
     200 <= resp.status < 300 && return true
-    throw(HTTP.StatusError(resp.status, resp.request.method, resp.request.target, resp))
+    throw(status_error(resp))
 end
 
 # Content-Range: bytes 0-9/443
@@ -53,9 +53,9 @@ function parseContentRange(str)
 end
 
 function check_redirect(key, resp)
-    if HTTP.isredirect(resp)
+    if is_redirect_response(resp)
         try
-            throw(HTTP.StatusError(resp.status, resp.request.method, resp.request.target, resp))
+            throw(status_error(resp))
         catch
             # The ArgumentError will be caused by the HTTP error to provide more context
             throw(ArgumentError("Invalid object key: $key"))
@@ -87,11 +87,11 @@ end
 # This changes the exception we get when the provided buffer is too small, as for the multipart
 # case, we do a HEAD request first to know the size of the object, which gives us the opportunity
 # to throw an ArgumentError. But for the single GET case, we don't know the size of the object
-# until we get the response, which would return as a HTTP.RequestError from within HTTP.jl.
-# The idea here is to unwrap the HTTP.RequestError and check if it's an ArgumentError, and if so,
-# throw that instead, so we same exception type is thrown in this case.
+# until we get the response. HTTP 1 wraps a response-stream error in HTTP.RequestError,
+# while HTTP 2 can surface the underlying error directly. Unwrap the HTTP 1 shape when
+# it is available so both versions return the same ArgumentError to the caller.
 function _check_buffer_too_small_exception(@nospecialize(e::Exception))
-    if e isa HTTP.RequestError
+    if isdefined(HTTP, :RequestError) && e isa getproperty(HTTP, :RequestError)
         request_error = e.error
         if request_error isa CompositeException
             length(request_error.exceptions) == 1 || return e
@@ -238,11 +238,13 @@ function getObjectImpl(x::AbstractStore, key::Resource, out::ResponseBodyType=no
                     # directly as HTTP receives the response body
                     _res = view(res, _rng)
                     r = getObject(x, url, _headers; response_stream=_res, kw...)
-                    Threads.atomic_add!(nbytes, get(r.request.context, :nbytes, 0))
+                    Threads.atomic_add!(nbytes, parse(Int,
+                        HTTP.header(r, "Content-Length", string(length(rng)))))
                 else
                     buf = view(buffers[$i], 1:min(partSize, length(rng)))
                     r = getObject(x, url, _headers; response_stream=buf, kw...)
-                    Threads.atomic_add!(nbytes, get(r.request.context, :nbytes, 0))
+                    Threads.atomic_add!(nbytes, parse(Int,
+                        HTTP.header(r, "Content-Length", string(length(rng)))))
                     put!(() -> write(body, buf), sync, _n)
                 end
             end

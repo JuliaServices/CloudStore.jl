@@ -34,9 +34,9 @@ function Object(store::AbstractStore, key::String; credentials::Union{CloudCrede
     url = makeURL(store, key)
     resp = API.headObject(store, url, HTTP.Headers(); credentials=credentials, kw...)
     # The ArgumentError will be caused by the HTTP error to provide more context
-    if HTTP.isredirect(resp)
+    if is_redirect_response(resp)
         try
-            throw(HTTP.StatusError(resp.status, resp.request.method, resp.request.target, resp))
+            throw(status_error(resp))
         catch
             throw(ArgumentError("Invalid object key: $key"))
         end
@@ -270,9 +270,9 @@ mutable struct PrefetchedDownloadStream{T <: Object} <: IO
         url = makeURL(store, key)
         resp = API.headObject(store, url, HTTP.Headers(); credentials=credentials, kw...)
         # The ArgumentError will be caused by the HTTP error to provide more context
-        if HTTP.isredirect(resp)
+        if is_redirect_response(resp)
             try
-                throw(HTTP.StatusError(resp.status, resp.request.method, resp.request.target, resp))
+                throw(status_error(resp))
             catch
                 throw(ArgumentError("Invalid object key: $key"))
             end
