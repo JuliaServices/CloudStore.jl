@@ -26,9 +26,9 @@ function iobufferbytes(x::Base.GenericIOBuffer)
     return view(data, lo:hi)
 end
 
-# HTTP 1 cannot write non-strided byte views (for example multipart String
+# HTTP 1 cannot write views over non-Array storage (for example multipart String
 # storage). Preserve its materialized fallback; HTTP 2 accepts borrowed views.
-uploadbytes(body) = isdefined(HTTP, :BytesBody) || body isa Union{StridedVector{UInt8},Base.CodeUnits{UInt8}} ? body : Vector{UInt8}(body)
+uploadbytes(body) = isdefined(HTTP, :BytesBody) || body isa Union{Vector{UInt8},SubArray{UInt8,1,<:Vector{UInt8},Tuple{UnitRange{Int}},true},Base.CodeUnits{UInt8}} ? body : Vector{UInt8}(body)
 
 function prepBody(x::RequestBodyType, compress::Bool, zlibng::Bool)
     if x isa String || x isa IOStream
