@@ -23,6 +23,9 @@ const MULTIPART_SIZE = 2^23
 
 defaultBatchSize() = 4 * Threads.nthreads()
 
+# A fresh collection belongs to one request; caller collections remain unchanged.
+transferheaders(headers) = headers === nothing ? HTTP.Headers() : HTTP.Headers(headers)
+
 const ResponseBodyType = Union{Nothing, AbstractVector{UInt8}, String, IO}
 const RequestBodyType = Union{AbstractVector{UInt8}, String, IO}
 

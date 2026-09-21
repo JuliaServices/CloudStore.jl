@@ -1550,3 +1550,5 @@ end
 end
 
 end # @testset "CloudStore.jl"
+
+include("transfer_storage.jl")

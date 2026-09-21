@@ -61,3 +61,37 @@ close(io)
 
 Keep chunks in object order. `concurrent_writes_to_channel` limits the number of uploads in
 flight and applies backpressure to `write`.
+
+
+## Default buffered transfers
+
+`CloudStore.put` borrows byte-vector inputs and the readable portion of an
+`IOBuffer` when `compress=false`. Keep that storage unchanged until the call
+returns, including all retries and multipart work. Each multipart byte-buffer
+part is a view into the input. File, arbitrary `IO`, noncontiguous array, and
+compression paths can require additional buffers.
+
+`CloudStore.get(store, key, destination)` accepts a byte vector or writable view.
+For multipart downloads it gives each concurrent range request a disjoint view
+of the destination. Without a destination, a multipart download allocates the
+final vector after learning the object size. Single-request downloads without a
+known size can grow their result buffer. File and IO multipart outputs use
+bounded part buffers to preserve order.
+
+CloudStore creates private `HTTP.Headers` collections before handing them to
+HTTP with `copyheaders=false`. Caller headers remain unchanged and concurrent
+parts do not share mutable headers. No separate fast API is required. Explicit
+`copyheaders=true` remains available through forwarded keywords.
+
+The complete allocation path also depends on dependency versions: older HTTP 2
+versions, including 2.7.1, ignore `copyheaders=false` and stage downloads; older
+CloudBase versions copy buffered AWS payloads before signing. Run
+`bench/transfer_allocations.jl --check` against the selected stack to verify its allocation
+profile. The script uses local authenticated MinIO and Azurite services and
+prints package versions, bytes allocated, and elapsed time. It does not measure
+cloud network saturation.
+
+Even with the optimized stack, signing hashes data, TLS encrypts it, and HTTP/2
+uses a reusable frame buffer. The supported target is no extra full-payload
+materialization for eligible buffers, bounded working storage per active part,
+and isolated retry state. This is not a promise of zero total allocations.
