@@ -29,7 +29,7 @@
     end
     headers = HTTP.Headers(["X-Example" => "value"])
     copied = CloudStore.API.transferheaders(headers)
-    HTTP.setheader(copied, "X-Example", "changed")
+    HTTP.setheader(copied, "X-Example" => "changed")
     @test HTTP.header(headers, "X-Example") == "value"
 end
 
