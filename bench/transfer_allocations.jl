@@ -34,12 +34,14 @@ function main()
             try
                 for n in (1 << 20, 16 << 20)
                     data = fill(0x61, n)
+                    stringbytes = codeunits(repeat("a", n))
                     io = IOBuffer()
                     write(io, data)
                     seekstart(io)
                     out = similar(data)
                     for (name, operation) in (
                         ("put-vector", () -> CloudStore.put(store, "bench", data; credentials, client, require_ssl_verification=true)),
+                        ("put-codeunits", () -> CloudStore.put(store, "bench", stringbytes; credentials, client, require_ssl_verification=true)),
                         ("put-view", () -> CloudStore.put(store, "bench", view(data, 1:n); credentials, client, require_ssl_verification=true)),
                         ("put-iobuffer", () -> begin
                             seekstart(io)

@@ -26,6 +26,10 @@ function iobufferbytes(x::Base.GenericIOBuffer)
     return view(data, lo:hi)
 end
 
+# HTTP 1 cannot write non-strided byte views (for example multipart String
+# storage). Preserve its materialized fallback; HTTP 2 accepts borrowed views.
+uploadbytes(body) = isdefined(HTTP, :BytesBody) || body isa Union{StridedVector{UInt8},Base.CodeUnits{UInt8}} ? body : Vector{UInt8}(body)
+
 function prepBody(x::RequestBodyType, compress::Bool, zlibng::Bool)
     if x isa String || x isa IOStream
         body = Mmap.mmap(x)
@@ -40,7 +44,7 @@ function prepBody(x::RequestBodyType, compress::Bool, zlibng::Bool)
         input = body isa Union{Vector{UInt8},Base.CodeUnits{UInt8}} ? body : Vector{UInt8}(body)
         return transcode(compressor(zlibng), input)
     end
-    return body
+    return uploadbytes(body)
 end
 
 function prepBodyMultipart(x::RequestBodyType, compress::Bool, zlibng::Bool)
@@ -63,7 +67,7 @@ function _read(body::Base.GenericIOBuffer, n)
     end
     res = @view body.data[body.ptr:body.ptr + n - 1]
     body.ptr += n
-    return res
+    return uploadbytes(res)
 end
 
 compressorstream(zlibng) = zlibng ? CodecZlibNG.GzipCompressorStream : CodecZlib.GzipCompressorStream

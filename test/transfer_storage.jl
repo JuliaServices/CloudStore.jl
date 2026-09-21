@@ -19,6 +19,14 @@
         @test position(body) == 100
         @test pointer(CloudStore.API.prepBody(IOBuffer(input), false, false)) == pointer(input)
     end
+    text = codeunits(repeat("hello", 100))
+    part = CloudStore.API._read(IOBuffer(text), 100)
+    @test part == text[1:100]
+    if isdefined(HTTP, :BytesBody)
+        @test pointer(part) == pointer(text)
+    else
+        @test part isa Vector{UInt8}
+    end
     headers = HTTP.Headers(["X-Example" => "value"])
     copied = CloudStore.API.transferheaders(headers)
     HTTP.setheader(copied, "X-Example", "changed")
