@@ -4,7 +4,7 @@ nbytes(x::Base.GenericIOBuffer) = x.size - x.ptr + 1
 nbytes(x::IO) = eof(x) ? 0 : bytesavailable(x)
 
 """
-    iobufferbytes(x::IOBuffer) -> AbstractVector{UInt8}
+    iobufferbytes(x::Base.GenericIOBuffer) -> AbstractVector{UInt8}
 
 Return the readable contents of `x`, i.e. the bytes in `[x.ptr, x.size]`.
 

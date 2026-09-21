@@ -69,7 +69,8 @@ flight and applies backpressure to `write`.
 `IOBuffer` when `compress=false`. Keep that storage unchanged until the call
 returns, including all retries and multipart work. Each multipart byte-buffer
 part is a view into the input. File, arbitrary `IO`, noncontiguous array, and
-compression paths can require additional buffers.
+compression paths can require additional buffers. HTTP 1 retains a copy fallback
+for non-strided views, such as views into string bytes.
 
 `CloudStore.get(store, key, destination)` accepts a byte vector or writable view.
 For multipart downloads it gives each concurrent range request a disjoint view
