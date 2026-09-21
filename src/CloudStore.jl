@@ -24,7 +24,13 @@ const MULTIPART_SIZE = 2^23
 defaultBatchSize() = 4 * Threads.nthreads()
 
 # A fresh collection belongs to one request; caller collections remain unchanged.
-transferheaders(headers) = headers === nothing ? HTTP.Headers() : headers isa HTTP.Headers ? copy(headers) : HTTP.Headers(headers)
+# `HTTP.Headers(::HTTP.Headers)` copies on both HTTP 1 and HTTP 2.
+transferheaders(headers) = headers === nothing ? HTTP.Headers() : HTTP.Headers(headers)
+
+# HTTP 1 and HTTP 2 releases whose `HTTP.Request` accepts `copyheaders` honor
+# `copyheaders=false`. HTTP 2.0 through 2.7 accept the keyword, ignore it, and warn.
+const OWNED_HEADERS_KW = !isdefined(HTTP, :BytesBody) || hasmethod(HTTP.Request, Tuple{String,String}, (:copyheaders,)) ?
+    (copyheaders=false,) : NamedTuple()
 
 const ResponseBodyType = Union{Nothing, AbstractVector{UInt8}, String, IO}
 const RequestBodyType = Union{AbstractVector{UInt8}, String, IO}

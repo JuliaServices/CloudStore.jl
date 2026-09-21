@@ -26,9 +26,14 @@ function iobufferbytes(x::Base.GenericIOBuffer)
     return view(data, lo:hi)
 end
 
-# HTTP 1 cannot write views over non-Array storage (for example multipart String
-# storage). Preserve its materialized fallback; HTTP 2 accepts borrowed views.
-uploadbytes(body) = isdefined(HTTP, :BytesBody) || body isa Union{Vector{UInt8},SubArray{UInt8,1,<:Vector{UInt8},Tuple{UnitRange{Int}},true},Base.CodeUnits{UInt8}} ? body : Vector{UInt8}(body)
+@static if isdefined(HTTP, :BytesBody)
+    # HTTP 2 sends any contiguous byte view without copying it.
+    uploadbytes(body) = body
+else
+    # HTTP 1 cannot write views over non-Array storage (for example multipart String
+    # storage), so materialize everything except the types its writer handles.
+    uploadbytes(body) = body isa Union{Vector{UInt8},SubArray{UInt8,1,<:Vector{UInt8},Tuple{UnitRange{Int}},true},Base.CodeUnits{UInt8}} ? body : Vector{UInt8}(body)
+end
 
 function prepBody(x::RequestBodyType, compress::Bool, zlibng::Bool)
     if x isa String || x isa IOStream
@@ -85,7 +90,7 @@ function putObjectImpl(x::AbstractStore, key::Resource, in::RequestBodyType;
     headers=nothing,
     lograte::Bool=false, kw...)
 
-    kw = merge((copyheaders=false,), (; kw...))
+    kw = merge(OWNED_HEADERS_KW, (; kw...))
     start_time = time()
     N = nbytes(in)
     wbytes = Threads.Atomic{Int}(0)

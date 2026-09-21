@@ -82,11 +82,14 @@ bounded part buffers to preserve order.
 CloudStore creates private `HTTP.Headers` collections before handing them to
 HTTP with `copyheaders=false`. Caller headers remain unchanged and concurrent
 parts do not share mutable headers. No separate fast API is required. Explicit
-`copyheaders=true` remains available through forwarded keywords.
+`copyheaders=true` remains available through forwarded keywords. CloudStore only
+passes the keyword to HTTP versions that honor it: HTTP 1, and HTTP 2 releases
+whose `HTTP.Request` accepts `copyheaders`. HTTP 2.0 through 2.7.1 accept it but
+ignore it, so CloudStore omits it there.
 
-The complete allocation path also depends on dependency versions: older HTTP 2
-versions, including 2.7.1, ignore `copyheaders=false` and stage downloads; older
-CloudBase versions copy buffered AWS payloads before signing. Run
+The complete allocation path also depends on dependency versions: HTTP 2 releases
+through 2.7.1 stage downloads through a scratch buffer; older CloudBase versions
+copy buffered AWS payloads before signing. Run
 `bench/transfer_allocations.jl --check` against the selected stack to verify its allocation
 profile. The script uses local authenticated MinIO and Azurite services and
 prints package versions, bytes allocated, and elapsed time. It does not measure

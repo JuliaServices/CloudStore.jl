@@ -48,12 +48,17 @@ if isdefined(HTTP, :Client)
                     lock = ReentrantLock()
                     attempts = Any[]
                     trace = function(ev)
-                        if ev isa HTTP.RequestEvent && ev.request.method == "PUT" && ev.request.content_length >= 1024
+                        ev isa HTTP.RequestEvent || return nothing
+                        if ev.request.method == "PUT" && ev.request.content_length >= 1024
                             Base.lock(lock) do
                                 push!(attempts, ev.request)
                             end
                             @test Base.mightalias(ev.request.body.data, data)
+                        elseif emulator === Minio && ev.request.method == "POST" && occursin("uploadId=", ev.request.target)
+                            # S3 CompleteMultipartUpload must not carry the caller's object headers.
+                            @test HTTP.header(ev.request, "Content-Type", "") != "application/octet-stream"
                         end
+                        return nothing
                     end
                     # Keep default multipart selection. Force replay after a successful
                     # first PUT; the emulator validates both attempts' signatures.

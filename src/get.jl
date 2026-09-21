@@ -128,7 +128,7 @@ function getObjectImpl(x::AbstractStore, key::Resource, out::ResponseBodyType=no
         batchSize > 0 || throw(ArgumentError("batchSize must be > 0"))
     end
     headers = transferheaders(headers)
-    kw = merge((copyheaders=false,), (; kw...))
+    kw = merge(OWNED_HEADERS_KW, (; kw...))
     start_time = time()
     url = makeURL(x, key)
     # setup return type
@@ -191,7 +191,8 @@ function getObjectImpl(x::AbstractStore, key::Resource, out::ResponseBodyType=no
     # make a head request to see if the object happens to be empty
     # if so, it isn't valid to make a Range bytes request, so we'll short-circuit
     # the head request also lets us know how big the object it
-    resp = API.headObject(x, url, headers; kw...)
+    # `headers` seeds every range request below, so HEAD gets its own copy.
+    resp = API.headObject(x, url, copy(headers); kw...)
     check_redirect(key, resp)
     contentLength = parse(Int, HTTP.header(resp, "Content-Length", "0"))
     if contentLength == 0
