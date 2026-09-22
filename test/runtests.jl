@@ -141,6 +141,14 @@ end
     @test CloudStore.API.makeURL(store, "hash#hash") == "https://recording.example/hash%23hash"
     @test CloudStore.API.makeURL(store, "unicode-ü") == "https://recording.example/unicode-%C3%BC"
     @test CloudStore.API.makeURL(store, "literal?mark") == "https://recording.example/literal%3Fmark"
+    @test CloudStore.API.makeURL(store, "///nested//key/") == "https://recording.example/nested//key/"
+    @test CloudStore.API.makeURL(store, "/") == "https://recording.example/"
+    @test CloudStore.API.makeURL(store, "a~b") == "https://recording.example/a%7Eb"
+    @test CloudStore.API.makeURL(store, SubString("prefix/nested/key", 8)) ==
+        "https://recording.example/nested/key"
+    key = repeat("segment/", 64)
+    CloudStore.API.makeURL(store, key)
+    @test (@allocated CloudStore.API.makeURL(store, key)) < 8ncodeunits(key)
     signed = CloudStore.API.parsedURLResource("key?X-Amz-Signature=a%2Fb&partNumber=1")
     @test CloudStore.API.makeURL(store, signed) ==
         "https://recording.example/key?X-Amz-Signature=a%2Fb&partNumber=1"
