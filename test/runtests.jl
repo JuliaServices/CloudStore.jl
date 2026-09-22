@@ -8,6 +8,8 @@ using HTTP: ConnectError, StatusError
 using Sockets: DNSError, IPv4, listenany
 using ExceptionUnwrapping: unwrap_exception
 
+include("s3_completion.jl")
+
 bytes(x) = codeunits(x)
 
 function header_value(headers, name)

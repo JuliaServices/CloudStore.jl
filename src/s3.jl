@@ -65,7 +65,13 @@ function API.completeMultipartUpload(x::Bucket, url, eTags, uploadId;
     contentType=nothing, headers=HTTP.Headers(), kw...)
     body = XMLDict.node_xml("CompleteMultipartUpload", Dict("Part" => [Dict("PartNumber" => string(i), "ETag" => eTag) for (i, eTag) in enumerate(eTags)]))
     resp = AWS.post(url; query=Dict("uploadId" => uploadId), body, service="s3", kw...)
-    return API.etag(HTTP.header(resp, "ETag"))
+    # S3 can return an Error body after HTTP 200 and keepalive whitespace.
+    result = xml_dict(lstrip(String(resp.body)))
+    if haskey(result, "Error")
+        failure = result["Error"]
+        error("S3 CompleteMultipartUpload failed ($(failure["Code"])): $(failure["Message"])")
+    end
+    return API.etag(result["CompleteMultipartUploadResult"]["ETag"])
 end
 
 function API.abortMultipartUpload(x::Bucket, url, uploadId; kw...)
