@@ -95,6 +95,10 @@ profile. The script uses local authenticated MinIO and Azurite services and
 prints package versions, bytes allocated, and elapsed time. It does not measure
 cloud network saturation.
 
+The gate also forces one retry per data request for signed vector uploads and
+preallocated downloads, at single-request and multipart sizes. It checks both
+attempt counts and the final downloaded bytes within the same allocation limits.
+
 Even with the optimized stack, signing hashes data, TLS encrypts it, and HTTP/2
 uses a reusable frame buffer. The supported target is no extra full-payload
 materialization for eligible buffers, bounded working storage per active part,
