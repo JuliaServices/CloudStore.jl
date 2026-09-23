@@ -55,8 +55,7 @@ function status_error(resp)
 end
 
 function makeURL(x::AbstractStore, key)
-    parts = split(lstrip(key, '/'), '/'; keepempty=true)
-    escaped = join(HTTP.escapeuri.(parts), '/')
+    escaped = HTTP.escapepath(lstrip(key, '/'))
     return joinpath(x.baseurl, escaped)
 end
 
