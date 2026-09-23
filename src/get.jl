@@ -113,7 +113,7 @@ function getObjectImpl(x::AbstractStore, key::Resource, out::ResponseBodyType=no
     objectMaxSize::Union{Int, Nothing}=out isa AbstractVector{UInt8} ? length(out) : nothing,
     decompress::Bool=false,
     zlibng::Bool=false,
-    headers=HTTP.Headers(),
+    headers=nothing,
     progress=nothing,
     lograte::Bool=false, kw...)
 
@@ -127,6 +127,8 @@ function getObjectImpl(x::AbstractStore, key::Resource, out::ResponseBodyType=no
         partSize > 0 || throw(ArgumentError("partSize must be > 0"))
         batchSize > 0 || throw(ArgumentError("batchSize must be > 0"))
     end
+    headers = transferheaders(headers)
+    kw = merge(OWNED_HEADERS_KW, (; kw...))
     start_time = time()
     url = makeURL(x, key)
     # setup return type
@@ -189,7 +191,8 @@ function getObjectImpl(x::AbstractStore, key::Resource, out::ResponseBodyType=no
     # make a head request to see if the object happens to be empty
     # if so, it isn't valid to make a Range bytes request, so we'll short-circuit
     # the head request also lets us know how big the object it
-    resp = API.headObject(x, url, headers; kw...)
+    # `headers` seeds every range request below, so HEAD gets its own copy.
+    resp = API.headObject(x, url, copy(headers); kw...)
     check_redirect(key, resp)
     contentLength = parse(Int, HTTP.header(resp, "Content-Length", "0"))
     if contentLength == 0
@@ -265,7 +268,7 @@ function getObjectImpl(x::AbstractStore, key::Resource, out::ResponseBodyType=no
             # make a copy of a view of just the compressed bytes in out, then decompress into out
             res = transcode(decompressor(zlibng), copy(view(out, 1:nbytes[])), out)
         else
-            res = resize!(out, nbytes[])
+            res = out isa Vector{UInt8} ? resize!(out, nbytes[]) : view(out, 1:nbytes[])
         end
     elseif out isa String
         close(body)

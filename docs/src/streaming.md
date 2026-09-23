@@ -61,3 +61,27 @@ close(io)
 
 Keep chunks in object order. `concurrent_writes_to_channel` limits the number of uploads in
 flight and applies backpressure to `write`.
+
+
+## Default buffered transfers
+
+With `compress=false`, `CloudStore.put` uploads byte vectors and the readable part
+of an `IOBuffer` without copying them. Multipart parts are views into the input.
+Keep that storage unchanged until the call returns, including retries. Files,
+other `IO` inputs, and compressed uploads use extra buffers. On HTTP 1, views
+over non-`Array` storage (such as string bytes) are copied first.
+
+`CloudStore.get(store, key, destination)` accepts a byte vector or a writable
+byte view. Multipart downloads give each concurrent range request its own part
+of the destination. File and `IO` outputs use bounded part buffers to keep parts
+in order.
+
+CloudStore gives HTTP a private `HTTP.Headers` collection for each request and
+passes `copyheaders=false` when the installed HTTP version honors it. Caller
+headers stay unchanged, and concurrent parts never share headers. A
+`copyheaders=true` keyword from the caller still takes precedence.
+
+The lowest-allocation path needs an HTTP version that supports `copyheaders` and
+a CloudBase version that signs buffered payloads without copying them.
+`bench/transfer_allocations.jl --check` measures client allocations against
+local MinIO and Azurite services, including one forced retry per data request.

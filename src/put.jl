@@ -1,42 +1,55 @@
 nbytes(x::AbstractVector{UInt8}) = length(x)
 nbytes(x::String) = filesize(x)
-nbytes(x::IOBuffer) = x.size - x.ptr + 1
+nbytes(x::Base.GenericIOBuffer) = x.size - x.ptr + 1
 nbytes(x::IO) = eof(x) ? 0 : bytesavailable(x)
 
 """
-    iobufferbytes(x::IOBuffer) -> AbstractVector{UInt8}
+    iobufferbytes(x::Base.GenericIOBuffer) -> AbstractVector{UInt8}
 
 Return the readable contents of `x`, i.e. the bytes in `[x.ptr, x.size]`.
 
-`x.data` is the buffer's *allocated capacity*, which for a buffer that has been written
-to extends past the data itself, so using it directly sent whatever happened to be in
-the rest of the allocation. On Julia 1.11+ `x.data` is also a `Memory`, which
-`transcode` does not accept, and slicing a `Memory` yields another `Memory`.
+The allocated capacity of `x.data` can extend past the readable contents.
+The view excludes that unused capacity and respects the current read position.
+On Julia 1.11+, storage can be `Memory`; compression materializes a compatible
+byte vector separately.
 
-The zero-copy path is preserved when the buffer's contents exactly fill a type the
-callers already handle.
+The returned view retains the buffer storage. Callers must not write to or resize
+`x` until the upload, including retries, completes.
 """
-function iobufferbytes(x::IOBuffer)
+function iobufferbytes(x::Base.GenericIOBuffer)
     lo, hi = x.ptr, x.size
     lo > hi && return UInt8[]
     data = x.data
     if lo == 1 && hi == length(data) && (data isa Vector{UInt8} || data isa Base.CodeUnits{UInt8})
         return data
     end
-    return Vector{UInt8}(view(data, lo:hi))
+    return view(data, lo:hi)
+end
+
+@static if isdefined(HTTP, :BytesBody)
+    # HTTP 2 sends any contiguous byte view without copying it.
+    uploadbytes(body) = body
+else
+    # HTTP 1 cannot write views over non-Array storage (for example multipart String
+    # storage), so materialize everything except the types its writer handles.
+    uploadbytes(body) = body isa Union{Vector{UInt8},SubArray{UInt8,1,<:Vector{UInt8},Tuple{UnitRange{Int}},true},Base.CodeUnits{UInt8}} ? body : Vector{UInt8}(body)
 end
 
 function prepBody(x::RequestBodyType, compress::Bool, zlibng::Bool)
     if x isa String || x isa IOStream
         body = Mmap.mmap(x)
-    elseif x isa IOBuffer
+    elseif x isa Base.GenericIOBuffer
         body = iobufferbytes(x)
     elseif x isa IO
         body = read(x)
     else
         body = x
     end
-    return compress ? transcode(compressor(zlibng), body) : body
+    if compress
+        input = body isa Union{Vector{UInt8},Base.CodeUnits{UInt8}} ? body : Vector{UInt8}(body)
+        return transcode(compressor(zlibng), input)
+    end
+    return uploadbytes(body)
 end
 
 function prepBodyMultipart(x::RequestBodyType, compress::Bool, zlibng::Bool)
@@ -53,13 +66,13 @@ end
 
 _read(body, n) = read(body, n)
 
-function _read(body::IOBuffer, n)
+function _read(body::Base.GenericIOBuffer, n)
     if body.ptr + n > body.size
         n = body.size - body.ptr + 1
     end
     res = @view body.data[body.ptr:body.ptr + n - 1]
     body.ptr += n
-    return res
+    return uploadbytes(res)
 end
 
 compressorstream(zlibng) = zlibng ? CodecZlibNG.GzipCompressorStream : CodecZlib.GzipCompressorStream
@@ -74,9 +87,10 @@ function putObjectImpl(x::AbstractStore, key::Resource, in::RequestBodyType;
     compress::Bool=false, credentials=nothing,
     progress=nothing,
     contentType::Union{Nothing,AbstractString}=nothing,
-    headers=HTTP.Headers(),
+    headers=nothing,
     lograte::Bool=false, kw...)
 
+    kw = merge(OWNED_HEADERS_KW, (; kw...))
     start_time = time()
     N = nbytes(in)
     wbytes = Threads.Atomic{Int}(0)
@@ -85,14 +99,14 @@ function putObjectImpl(x::AbstractStore, key::Resource, in::RequestBodyType;
         body = prepBody(in, compress, zlibng)
         wire_bytes = nbytes(body)
         resp = putObject(x, key, body;
-            contentType, headers=copy(headers), credentials, kw...)
+            contentType, headers=transferheaders(headers), credentials, kw...)
         wbytes[] = wire_bytes
         obj = Object(x, credentials, resourceKey(key), N, etag(HTTP.header(resp, "ETag")))
         @goto done
     end
     # multipart upload
     uploadState = startMultipartUpload(x, key;
-        contentType, headers=copy(headers), credentials, kw...)
+        contentType, headers=transferheaders(headers), credentials, kw...)
     url = makeURL(x, key)
     eTags = String[]
     local eTag
@@ -138,7 +152,7 @@ function putObjectImpl(x::AbstractStore, key::Resource, in::RequestBodyType;
             in isa String && close(body)
         end
         eTag = completeMultipartUpload(x, url, eTags, uploadState;
-            contentType, headers=copy(headers), credentials, kw...)
+            contentType, headers=transferheaders(headers), credentials, kw...)
     catch
         try
             abortMultipartUpload(x, url, uploadState; credentials, kw...)

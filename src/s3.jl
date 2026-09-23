@@ -56,7 +56,7 @@ function API.startMultipartUpload(x::Bucket, key;
 end
 
 function API.uploadPart(x::Bucket, url, part, partNumber, uploadId; kw...)
-    resp = AWS.put(url, [], part;
+    resp = AWS.put(url, HTTP.Headers(), part;
         query=Dict("partNumber" => string(partNumber), "uploadId" => uploadId), service="s3", kw...)
     return (HTTP.header(resp, "ETag"), length(part))
 end
@@ -64,12 +64,14 @@ end
 function API.completeMultipartUpload(x::Bucket, url, eTags, uploadId;
     contentType=nothing, headers=HTTP.Headers(), kw...)
     body = XMLDict.node_xml("CompleteMultipartUpload", Dict("Part" => [Dict("PartNumber" => string(i), "ETag" => eTag) for (i, eTag) in enumerate(eTags)]))
-    resp = AWS.post(url; query=Dict("uploadId" => uploadId), body, service="s3", kw...)
+    # Caller headers describe the object and were sent when the upload started.
+    # The completion request carries only its XML body.
+    resp = AWS.post(url, HTTP.Headers(); query=Dict("uploadId" => uploadId), body, service="s3", kw...)
     return API.etag(HTTP.header(resp, "ETag"))
 end
 
 function API.abortMultipartUpload(x::Bucket, url, uploadId; kw...)
-    return AWS.delete(url;
+    return AWS.delete(url, HTTP.Headers();
         query=Dict("uploadId" => uploadId), service="s3", kw...)
 end
 

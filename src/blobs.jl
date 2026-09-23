@@ -67,7 +67,7 @@ API.startMultipartUpload(x::Container, key;
 
 function API.uploadPart(x::Container, url, part, partNumber, uploadId; kw...)
     blockid = base64encode(lpad(partNumber - 1, 64, '0'))
-    Azure.put(url, [], part;
+    Azure.put(url, HTTP.Headers(), part;
         query=Dict("comp" => "block", "blockid" => blockid), kw...)
     return (blockid, length(part))
 end
