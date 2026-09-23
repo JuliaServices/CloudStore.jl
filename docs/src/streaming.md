@@ -65,41 +65,23 @@ flight and applies backpressure to `write`.
 
 ## Default buffered transfers
 
-`CloudStore.put` borrows byte-vector inputs and the readable portion of an
-`IOBuffer` when `compress=false`. Keep that storage unchanged until the call
-returns, including all retries and multipart work. Each multipart byte-buffer
-part is a view into the input. File, arbitrary `IO`, noncontiguous array, and
-compression paths can require additional buffers. HTTP 1 retains a copy fallback
-for views over non-Array storage, such as string bytes.
+With `compress=false`, `CloudStore.put` uploads byte vectors and the readable part
+of an `IOBuffer` without copying them. Multipart parts are views into the input.
+Keep that storage unchanged until the call returns, including retries. Files,
+other `IO` inputs, and compressed uploads use extra buffers. On HTTP 1, views
+over non-`Array` storage (such as string bytes) are copied first.
 
-`CloudStore.get(store, key, destination)` accepts a byte vector or writable view.
-For multipart downloads it gives each concurrent range request a disjoint view
-of the destination. Without a destination, a multipart download allocates the
-final vector after learning the object size. Single-request downloads without a
-known size can grow their result buffer. File and IO multipart outputs use
-bounded part buffers to preserve order.
+`CloudStore.get(store, key, destination)` accepts a byte vector or a writable
+byte view. Multipart downloads give each concurrent range request its own part
+of the destination. File and `IO` outputs use bounded part buffers to keep parts
+in order.
 
-CloudStore creates private `HTTP.Headers` collections before handing them to
-HTTP with `copyheaders=false`. Caller headers remain unchanged and concurrent
-parts do not share mutable headers. No separate fast API is required. Explicit
-`copyheaders=true` remains available through forwarded keywords. CloudStore only
-passes the keyword to HTTP versions that honor it: HTTP 1, and HTTP 2 releases
-whose `HTTP.Request` accepts `copyheaders`. HTTP 2.0 through 2.7.1 accept it but
-ignore it, so CloudStore omits it there.
+CloudStore gives HTTP a private `HTTP.Headers` collection for each request and
+passes `copyheaders=false` when the installed HTTP version honors it. Caller
+headers stay unchanged, and concurrent parts never share headers. A
+`copyheaders=true` keyword from the caller still takes precedence.
 
-The complete allocation path also depends on dependency versions: HTTP 2 releases
-through 2.7.1 stage downloads through a scratch buffer; older CloudBase versions
-copy buffered AWS payloads before signing. Run
-`bench/transfer_allocations.jl --check` against the selected stack to verify its allocation
-profile. The script uses local authenticated MinIO and Azurite services and
-prints package versions, bytes allocated, and elapsed time. It does not measure
-cloud network saturation.
-
-The gate also forces one retry per data request for signed vector uploads and
-preallocated downloads, at single-request and multipart sizes. It checks both
-attempt counts and the final downloaded bytes within the same allocation limits.
-
-Even with the optimized stack, signing hashes data, TLS encrypts it, and HTTP/2
-uses a reusable frame buffer. The supported target is no extra full-payload
-materialization for eligible buffers, bounded working storage per active part,
-and isolated retry state. This is not a promise of zero total allocations.
+The lowest-allocation path needs an HTTP version that supports `copyheaders` and
+a CloudBase version that signs buffered payloads without copying them.
+`bench/transfer_allocations.jl --check` measures client allocations against
+local MinIO and Azurite services, including one forced retry per data request.
