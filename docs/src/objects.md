@@ -36,7 +36,8 @@ obj = CloudStore.put(
 ```
 
 Set `allowMultipart=false` to force one request. Set `compress=true` to gzip the uploaded
-bytes. CloudStore does not add `.gz` to the key.
+bytes. CloudStore does not add `.gz` to the key, and the returned `Object` has the compressed
+size.
 
 ## Download
 

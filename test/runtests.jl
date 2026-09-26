@@ -387,9 +387,13 @@ end
     @test transcode(GzipDecompressor, uploaded) == data
     @test length(store.parts) > cld(length(data), 64)
     @test store.completed_tags == ["etag-$i" for i in 1:length(store.parts)]
-    @test obj.size == length(data)
+    # The returned Object describes the stored (compressed) bytes, which ranged reads validate.
+    @test obj.size == length(uploaded)
     @test isopen(input)
     @test !store.aborted
+    single_store = RecordingStore()
+    single = API.putObjectImpl(single_store, "single.bin", data; allowMultipart=false, compress=true)
+    @test single.size == length(single_store.parts[0]) != length(data)
 
     # A failed early part must not leave later workers blocked waiting for its tag,
     # and cleanup must still leave caller-owned IO usable.
