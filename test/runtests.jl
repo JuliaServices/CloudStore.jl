@@ -100,7 +100,7 @@ function CloudStore.API.headObject(store::RecordingDownloadStore, url, _headers;
     request = HTTP.Request("HEAD", url)
     return HTTP.Response(
         200,
-        ["Content-Length" => string(length(store.data))],
+        ["Content-Length" => string(length(store.data)), "ETag" => "\"recording\""],
         UInt8[];
         request,
     )
@@ -117,15 +117,17 @@ function CloudStore.API.getObject(
     match_result = match(r"bytes=(\d+)-(\d+)", range)
     first_byte = parse(Int, match_result[1]) + 1
     last_byte = parse(Int, match_result[2]) + 1
-    part = store.data[first_byte:last_byte]
+    part = view(store.data, first_byte:last_byte)
     if response_stream !== nothing
         response_stream isa IO ? write(response_stream, part) : copyto!(response_stream, part)
     end
     request = HTTP.Request("GET", url)
     return HTTP.Response(
         206,
-        ["Content-Length" => string(length(part))],
-        response_stream === nothing ? part : response_stream;
+        ["Content-Length" => string(length(part)),
+            "Content-Range" => "bytes $(first_byte - 1)-$(last_byte - 1)/$(length(store.data))",
+            "ETag" => "\"recording\""],
+        response_stream === nothing ? copy(part) : response_stream;
         request,
     )
 end
@@ -1560,3 +1562,4 @@ end
 end # @testset "CloudStore.jl"
 
 include("transfer_storage.jl")
+include("range_downloads.jl")

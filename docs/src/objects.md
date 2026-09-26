@@ -63,6 +63,17 @@ Multipart downloads first read object metadata. Use `objectMaxSize` when you kno
 bound and want to avoid that request for a small object. Set `decompress=true` to gunzip the
 downloaded bytes.
 
+Multipart downloads bind every range to the strong ETag returned by the metadata
+request. Each response must contain the requested range, total size, byte count,
+and ETag. A changed object or an inconsistent response raises an error instead
+of returning a mixture of object versions or incomplete data. S3 and Azure Blob
+Storage provide these headers. For endpoints without strong ETags, use
+`allowMultipart=false` to make a single GET and retain direct control over HTTP
+headers. Caller preconditions and explicit version query parameters are preserved.
+
+A failed download may have written partial data to the destination. Discard that
+data before using the result.
+
 ## Metadata and listing
 
 Read response headers without downloading the object:

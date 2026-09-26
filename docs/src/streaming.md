@@ -33,6 +33,13 @@ io = CloudStore.PrefetchedDownloadStream(
 The first positional size is the size of each in-memory prefetch buffer. The keyword value is
 the maximum size of each range request. The stream is read-only and is not thread-safe.
 
+Prefetched streams and `copyto!(destination, destination_offset, object,
+object_offset, byte_count)` validate the range, size, and strong ETag of every
+response. An `Object` without an ETag is refreshed with one metadata request before
+reading. A changed size or a missing/weak ETag causes an error. Zero-byte copies
+and empty streams make no range requests. Ranges are downloaded as stored bytes;
+wrap the stream in a decompressor to decode compressed objects.
+
 ## Multipart uploads
 
 [`CloudStore.MultipartUploadStream`](@ref) sends each written byte vector as one part. The
@@ -74,7 +81,8 @@ over non-`Array` storage (such as string bytes) are copied first.
 `CloudStore.get(store, key, destination)` accepts a byte vector or a writable
 byte view. Multipart downloads give each concurrent range request its own part
 of the destination. File and `IO` outputs use bounded part buffers to keep parts
-in order.
+in order, writing each validated part while later parts continue downloading.
+`copyto!` also receives bytes directly into the requested destination slice.
 
 CloudStore gives HTTP a private `HTTP.Headers` collection for each request and
 passes `copyheaders=false` when the installed HTTP version honors it. Caller

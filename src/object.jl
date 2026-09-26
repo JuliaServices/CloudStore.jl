@@ -11,6 +11,9 @@ A remote object in an S3 bucket or Azure Blob container.
 Constructing an `Object` from a store and key sends a metadata request. Upload and list
 operations also return `Object` values. The fields include `store`, `credentials`, `key`,
 `size`, `eTag`, and provider-specific `properties`.
+
+`copyto!` and `PrefetchedDownloadStream` use the size and strong ETag to validate
+each range. If the ETag is missing, they refresh metadata before reading.
 """
 struct Object{T <: AbstractStore}
     store::T
@@ -30,9 +33,9 @@ Object(
     properties::Dict{String, Any} = Dict{String, Any}()) =
             Object(store, creds, String(key), Int(size), String(eTag), properties)
 
-function Object(store::AbstractStore, key::String; credentials::Union{CloudCredentials, Nothing}=nothing, kw...)
+function Object(store::AbstractStore, key::String; credentials::Union{CloudCredentials, Nothing}=nothing, headers=nothing, kw...)
     url = makeURL(store, key)
-    resp = API.headObject(store, url, HTTP.Headers(); credentials=credentials, kw...)
+    resp = API.headObject(store, url, transferheaders(headers); credentials=credentials, kw...)
     # The ArgumentError will be caused by the HTTP error to provide more context
     if is_redirect_response(resp)
         try
@@ -41,8 +44,9 @@ function Object(store::AbstractStore, key::String; credentials::Union{CloudCrede
             throw(ArgumentError("Invalid object key: $key"))
         end
     end
-    size = parse(Int, HTTP.header(resp, "Content-Length", "0"))
-    #TODO: get eTag
+    resp.status == 200 || throw(status_error(resp))
+    size = parse(Int, HTTP.header(resp, "Content-Length", ""))
+    size >= 0 || throw(ArgumentError("negative object Content-Length"))
     et = etag(HTTP.header(resp, "ETag", ""))
     return Object(store, credentials, key, size, String(et))
 end
@@ -51,23 +55,41 @@ Base.length(x::Object) = x.size
 
 function Base.copyto!(dest::AbstractVector{UInt8}, doff::Integer, src::Object, soff::Integer, n::Integer)
     # validate arguments
-    0 < doff <= length(dest) || throw(BoundsError(dest, doff))
-    0 < soff <= length(src) || throw(BoundsError(src, soff))
-    (soff + n) - 1 <= length(src) || throw(ArgumentError("requested number of bytes (`$n`) would exceed source length"))
-    (doff + n) - 1 <= length(dest) || throw(ArgumentError("requested number of bytes (`$n`) would exceed destination length"))
+    n >= 0 || throw(ArgumentError("requested number of bytes must be nonnegative"))
+    0 < doff && doff - (n == 0) <= length(dest) || throw(BoundsError(dest, doff))
+    0 < soff && soff - (n == 0) <= length(src) || throw(BoundsError(src, soff))
+    n <= length(src) - (soff - 1) || throw(ArgumentError("requested number of bytes (`$n`) would exceed source length"))
+    n <= length(dest) - (doff - 1) || throw(ArgumentError("requested number of bytes (`$n`) would exceed destination length"))
     return unsafe_copyto!(dest, doff, src, soff, n)
 end
 
+function rangeObject(src::Object; kw...)
+    if isempty(src.eTag)
+        snapshot = Object(src.store, src.key; credentials=src.credentials, kw...)
+        length(snapshot) == length(src) || throw(ArgumentError("object size changed before ranged download"))
+        src = snapshot
+    end
+    rangeETag(src.eTag)
+    return src
+end
+
+function getRange!(dest, src::Object, soff::Integer, n::Integer; headers=nothing, kw...)
+    n == 0 && return 0
+    src = rangeObject(src; headers, kw...)
+    return getRange!(src.store, makeURL(src.store, src.key), transferheaders(headers),
+        (soff - 1):(soff + n - 2), length(src), rangeETag(src.eTag), dest;
+        credentials=src.credentials, kw...)
+end
+
 function getRange(src::Object, soff::Integer, n::Integer; kw...)
-    headers = HTTP.Headers()
-    HTTP.setheader(headers, contentRange((soff - 1):(soff + n - 2)))
-    url = makeURL(src.store, src.key)
-    return getObject(src.store, url, headers; credentials=src.credentials, kw...).body
+    dest = Vector{UInt8}(undef, n)
+    getRange!(dest, src, soff, n; kw...)
+    return dest
 end
 
 function Base.unsafe_copyto!(dest::AbstractVector{UInt8}, doff::Integer, src::Object, soff::Integer, n::Integer)
-    copyto!(dest, doff, getRange(src, soff, n))
-    return n
+    n == 0 && return 0
+    return getRange!(view(dest, doff:(doff + n - 1)), src, soff, n)
 end
 
 mutable struct TaskCondition
@@ -105,6 +127,7 @@ function _prefetching_task(io)
             Base.@lock io.cond.cond_wait begin
                 while true
                     io.cond.ntasks == 0 && break
+                    isopen(io.download_queue) || return nothing
                     wait(io.cond.cond_wait)
                 end
             end
@@ -124,22 +147,18 @@ function _prefetching_task(io)
     return nothing
 end
 
-function _download_task(io; kw...)
-    headers = HTTP.Headers()
+function _download_task(io; headers=nothing, kw...)
     object = io.object
     url = makeURL(object.store, io.object.key)
     credentials = object.credentials
-    response_stream = IOBuffer(view(UInt8[], 1:0), write=true, maxsize=io.prefetch_multipart_size)
+    tag = rangeETag(object.eTag)
 
     try
         while true
             (off, rng, download_buffer) = take!(io.download_queue)
-            HTTP.setheader(headers, contentRange(rng))
             buffer_view = view(download_buffer, off + 1:off + length(rng))
-            response_stream.data = buffer_view
-            response_stream.maxsize = length(buffer_view)
-            seekstart(response_stream)
-            _ = getObject(object.store, url, headers; credentials, response_stream, kw...)
+            getRange!(object.store, url, transferheaders(headers), rng, length(object), tag,
+                buffer_view; credentials, kw...)
 
             Base.@lock io.cond.cond_wait begin
                 io.cond.ntasks -= 1
@@ -183,6 +202,10 @@ prefetching process. Number of spawned tasks is upper-bounded by the size of the
 the number of threads available (see the internal `_ndownload_tasks` helper function).
 
 **Reading from this stream is not thread-safe**.
+
+Range responses must match the object's size and strong ETag. A changed object
+or incomplete range raises an error. Bytes are read without HTTP decompression;
+wrap this stream in a decompressor when needed.
 
 # Arguments
 * `store::AbstractStore`: The S3 Bucket / Azure Container object
@@ -234,6 +257,7 @@ mutable struct PrefetchedDownloadStream{T <: Object} <: IO
         prefetch_size > 0 || throw(ArgumentError("`prefetch_size` must be positive, got $prefetch_size"))
         prefetch_multipart_size > 0 || throw(ArgumentError("`prefetch_multipart_size` must be positive, got $prefetch_multipart_size"))
         len = length(object)
+        len > 0 && (object = rangeObject(object; kw...))
         size = min(prefetch_size, len)
         io = new{T}(
             object,
@@ -267,19 +291,7 @@ mutable struct PrefetchedDownloadStream{T <: Object} <: IO
         prefetch_multipart_size::Int=DEFAULT_PREFETCH_MULTIPART_SIZE,
         kw...,
     )
-        url = makeURL(store, key)
-        resp = API.headObject(store, url, HTTP.Headers(); credentials=credentials, kw...)
-        # The ArgumentError will be caused by the HTTP error to provide more context
-        if is_redirect_response(resp)
-            try
-                throw(status_error(resp))
-            catch
-                throw(ArgumentError("Invalid object key: $key"))
-            end
-        end
-        len = parse(Int, HTTP.header(resp, "Content-Length", "0"))
-        et = etag(HTTP.header(resp, "ETag", ""))
-        object = Object(store, credentials, String(key), Int(len), String(et))
+        object = Object(store, key; credentials, kw...)
         return PrefetchedDownloadStream(object, prefetch_size; prefetch_multipart_size, kw...)
     end
 end
