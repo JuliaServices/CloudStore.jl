@@ -7,6 +7,7 @@ makedocs(;
         "Home" => "index.md",
         "Object operations" => "objects.md",
         "Streaming transfers" => "streaming.md",
+        "Manual multipart uploads" => "manual_multipart.md",
         "API Reference" => "reference.md",
     ],
     sitename="CloudStore.jl",
