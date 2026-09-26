@@ -56,7 +56,7 @@ function with_range_fixture(f, mode=:valid; data=collect(codeunits("abcdefghijkl
                         status, body = 200, data
                     elseif mode in (:changed, :changed_ignores) && lo > 0
                         tag = "\"v2\""
-                        body = collect(codeunits(uppercase(String(body))))
+                        body = .~body
                         if mode == :changed && get(headers, "if-match", "") == "\"v1\""
                             status, body = 412, UInt8[]
                         end
@@ -194,6 +194,7 @@ end
             @test_throws ArgumentError copyto!(zeros(UInt8, 4), 1, object, 1, typemax(Int))
             start = length(requests)
             @test copyto!(UInt8[], 1, object, 13, 0) == 0
+            @test copyto!(UInt8[], 0, object, 0, 0) == 0
             empty_object = CloudStore.Object(store, credentials, "empty", 0, "")
             @test copyto!(UInt8[], 1, empty_object, 1, 0) == 0
             @test read_prefetched(empty_object) == UInt8[]
@@ -261,6 +262,19 @@ end
                 finally
                     output isa String && isfile(output) && rm(output)
                 end
+            end
+        end
+    end
+    # The first part reaches the decompressor before a later part fails. The
+    # range error must not be replaced by a truncated-gzip error from cleanup.
+    with_range_fixture(:changed; data=compressed, content_encoding="gzip") do host, requests
+        for (store, credentials) in range_stores(host)
+            path = tempname()
+            try
+                @test_throws CompositeException CloudStore.get(store, "data", path; credentials, decompress=true,
+                    multipartThreshold=1, partSize=7, batchSize=3, retries=0)
+            finally
+                rm(path; force=true)
             end
         end
     end

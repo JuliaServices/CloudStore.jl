@@ -55,9 +55,10 @@ Base.length(x::Object) = x.size
 
 function Base.copyto!(dest::AbstractVector{UInt8}, doff::Integer, src::Object, soff::Integer, n::Integer)
     # validate arguments
-    n >= 0 || throw(ArgumentError("requested number of bytes must be nonnegative"))
-    0 < doff && doff - (n == 0) <= length(dest) || throw(BoundsError(dest, doff))
-    0 < soff && soff - (n == 0) <= length(src) || throw(BoundsError(src, soff))
+    n == 0 && return 0
+    n > 0 || throw(ArgumentError("requested number of bytes must be nonnegative"))
+    0 < doff <= length(dest) || throw(BoundsError(dest, doff))
+    0 < soff <= length(src) || throw(BoundsError(src, soff))
     n <= length(src) - (soff - 1) || throw(ArgumentError("requested number of bytes (`$n`) would exceed source length"))
     n <= length(dest) - (doff - 1) || throw(ArgumentError("requested number of bytes (`$n`) would exceed destination length"))
     return unsafe_copyto!(dest, doff, src, soff, n)
@@ -76,8 +77,8 @@ end
 function getRange!(dest, src::Object, soff::Integer, n::Integer; headers=nothing, kw...)
     n == 0 && return 0
     src = rangeObject(src; headers, kw...)
-    return getRange!(src.store, makeURL(src.store, src.key), transferheaders(headers),
-        (soff - 1):(soff + n - 2), length(src), rangeETag(src.eTag), dest;
+    return getRange!(dest, src.store, makeURL(src.store, src.key), headers,
+        (soff - 1):(soff + n - 2), length(src), rangeETag(src.eTag);
         credentials=src.credentials, kw...)
 end
 
@@ -87,10 +88,8 @@ function getRange(src::Object, soff::Integer, n::Integer; kw...)
     return dest
 end
 
-function Base.unsafe_copyto!(dest::AbstractVector{UInt8}, doff::Integer, src::Object, soff::Integer, n::Integer)
-    n == 0 && return 0
-    return getRange!(view(dest, doff:(doff + n - 1)), src, soff, n)
-end
+Base.unsafe_copyto!(dest::AbstractVector{UInt8}, doff::Integer, src::Object, soff::Integer, n::Integer) =
+    getRange!(view(dest, doff:(doff + n - 1)), src, soff, n)
 
 mutable struct TaskCondition
     cond_wait::Threads.Condition
@@ -157,8 +156,8 @@ function _download_task(io; headers=nothing, kw...)
         while true
             (off, rng, download_buffer) = take!(io.download_queue)
             buffer_view = view(download_buffer, off + 1:off + length(rng))
-            getRange!(object.store, url, transferheaders(headers), rng, length(object), tag,
-                buffer_view; credentials, kw...)
+            getRange!(buffer_view, object.store, url, headers, rng, length(object), tag;
+                credentials, kw...)
 
             Base.@lock io.cond.cond_wait begin
                 io.cond.ntasks -= 1

@@ -55,17 +55,20 @@ end
 function rangeETag(tag)
     (isempty(tag) || startswith(tag, "W/")) && throw(ArgumentError(
         "ranged downloads require a strong ETag; use allowMultipart=false for a single GET"))
-    # Object stores ETags without their surrounding quotes.
+    # `Object.eTag` omits the surrounding quotes.
     value = startswith(tag, '"') ? String(tag) : string('"', tag, '"')
     occursin(r"^\"[^\x00-\x20\"\x7f]*\"\z", value) || throw(ArgumentError("invalid ETag: $tag"))
     return value
 end
 
-function getRange!(store, url, headers, rng, total, tag, dest; kw...)
+# Download bytes `rng` (0-based) of the object version `tag` into `dest` and
+# return the byte count. Throws unless the response has exactly that range,
+# the expected total size, and the same ETag.
+function getRange!(dest, store, url, headers, rng, total, tag; kw...)
+    headers = transferheaders(headers)
     target = dest
+    # HTTP writes into contiguous memory; other destinations use a temporary buffer.
     direct = dest isa StridedVector{UInt8} && stride(dest, 1) == 1
-    # HTTP receives through contiguous memory. Keep generic copyto! semantics
-    # for destinations such as views selecting every other byte.
     direct || (dest = Vector{UInt8}(undef, length(rng)))
     HTTP.setheader(headers, contentRange(rng))
     # Preserve caller preconditions: adding If-Match can change how providers
@@ -74,19 +77,17 @@ function getRange!(store, url, headers, rng, total, tag, dest; kw...)
     any(name -> HTTP.hasheader(headers, name), conditions) || HTTP.setheader(headers, "If-Match" => tag)
     # Ranges address stored bytes. Decompression belongs after reassembly.
     request_kw = merge(OWNED_HEADERS_KW, (; kw...), (; decompress=false))
-    # A view prevents HTTP from resizing the caller's buffer, and bounds writes
-    # even when the server ignores Range or sends an oversized response.
+    # A view keeps HTTP from resizing the caller's buffer and bounds writes
+    # when the server ignores Range or sends too many bytes.
     dest = view(dest, 1:length(rng))
     @static if isdefined(HTTP, :BytesBody)
         resp = getObject(store, url, headers; response_stream=dest, request_kw...)
-        # HTTP 2's buffered request result records the bytes actually received,
-        # independently of the wire Content-Length header or retained body.
+        # HTTP 2 sets `content_length` to the body bytes it received, not the header value.
         nbytes = resp.content_length
     else
         buffer = IOBuffer(dest; write=true, maxsize=length(dest))
         receive = function(http)
-            # HTTP 1 retries reuse the sink. Reset for every attempt, including
-            # a retry after part of the previous response was already received.
+            # Retries call this again; start each attempt at the beginning of `dest`.
             seekstart(buffer)
             response = HTTP.startread(http)
             if response.status == 206
@@ -96,7 +97,7 @@ function getRange!(store, url, headers, rng, total, tag, dest; kw...)
             elseif response.status == 200
                 throw(ArgumentError("server ignored Range during ranged download"))
             else
-                # Leave error/redirect responses to the normal HTTP layers.
+                # Keep error and redirect bodies out of `dest` for the normal HTTP layers.
                 response.body = read(http)
             end
         end
@@ -109,9 +110,6 @@ function getRange!(store, url, headers, rng, total, tag, dest; kw...)
         "unexpected Content-Range: $range; expected bytes $(first(rng))-$(last(rng))/$total"))
     nbytes == length(rng) || throw(ArgumentError(
         "incomplete ranged download: expected $(length(rng)) bytes, received $nbytes"))
-    content_length = HTTP.header(resp, "Content-Length", "")
-    isempty(content_length) || parse(Int, content_length) == nbytes || throw(ArgumentError(
-        "Content-Length does not match the downloaded range"))
     rangeETag(HTTP.header(resp, "ETag", "")) == tag || throw(ArgumentError(
         "object ETag changed during ranged download"))
     direct || copyto!(target, 1, dest, 1, nbytes)
@@ -284,7 +282,8 @@ function getObjectImpl(x::AbstractStore, key::Resource, out::ResponseBodyType=no
         res = out
         body = view(out, 1:contentLength)
     elseif out isa String
-        body = decompress ? decompressorstream(zlibng)(open(out, "w")) : open(out, "w")
+        file = open(out, "w")
+        body = decompress ? decompressorstream(zlibng)(file) : file
         buffers = BufferBatch(batchSize, partSize)
     else
         body = decompress ? decompressorstream(zlibng)(out) : out
@@ -309,12 +308,12 @@ function getObjectImpl(x::AbstractStore, key::Resource, out::ResponseBodyType=no
                         else
                             buf = view(buffers[$i], 1:length(rng))
                         end
-                        received = getRange!(x, url, copy(headers), rng, contentLength, tag, buf; kw...)
+                        received = getRange!(buf, x, url, headers, rng, contentLength, tag; kw...)
                         Threads.atomic_add!(nbytes, received)
                     end
                 end
-                # Publish validated parts in order while later downloads continue.
-                # On failure, @sync joins the writer and all outstanding requests.
+                # Write parts in order as they are validated while later parts
+                # download. On failure, @sync still waits for every task.
                 if !(out === nothing || out isa AbstractVector{UInt8})
                     Threads.@spawn for i = 1:count
                         wait(downloads[i])
@@ -329,7 +328,9 @@ function getObjectImpl(x::AbstractStore, key::Resource, out::ResponseBodyType=no
             end
         end
     catch
-        out isa String && close(body)
+        # Close the file itself: closing a decompressor over partial data throws
+        # and would replace the download error.
+        out isa String && close(file)
         rethrow()
     end
 
