@@ -4,6 +4,7 @@ import CloudStore: S3, Blobs
 using CodecZlib
 import HTTP
 import Sockets
+include("upload_buffers.jl")
 using HTTP: ConnectError, StatusError
 using Sockets: DNSError, IPv4, listenany
 using ExceptionUnwrapping: unwrap_exception
