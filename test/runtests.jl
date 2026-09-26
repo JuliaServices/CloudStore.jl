@@ -10,6 +10,8 @@ using Sockets: DNSError
 using ExceptionUnwrapping: unwrap_exception
 
 include("s3_completion.jl")
+include("manual_multipart.jl")
+include("manual_resume.jl")
 
 bytes(x) = codeunits(x)
 
