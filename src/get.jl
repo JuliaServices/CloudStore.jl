@@ -47,9 +47,73 @@ end
 contentRange(rng) = "Range" => "bytes=$(first(rng))-$(last(rng))"
 
 function parseContentRange(str)
-    m = match(r"bytes (\d+)-(\d+)/(\d+)", str)
+    m = match(r"^bytes (\d+)-(\d+)/(\d+)\z", str)
     m === nothing && error("invalid Content-Range: $str")
     return (parse(Int, m[1]), parse(Int, m[2]), parse(Int, m[3]))
+end
+
+function rangeETag(tag)
+    (isempty(tag) || startswith(tag, "W/")) && throw(ArgumentError(
+        "ranged downloads require a strong ETag; use allowMultipart=false for a single GET"))
+    # `Object.eTag` omits the surrounding quotes.
+    value = startswith(tag, '"') ? String(tag) : string('"', tag, '"')
+    occursin(r"^\"[^\x00-\x20\"\x7f]*\"\z", value) || throw(ArgumentError("invalid ETag: $tag"))
+    return value
+end
+
+# Download bytes `rng` (0-based) of the object version `tag` into `dest` and
+# return the byte count. Throws unless the response has exactly that range,
+# the expected total size, and the same ETag.
+function getRange!(dest, store, url, headers, rng, total, tag; kw...)
+    headers = transferheaders(headers)
+    target = dest
+    # HTTP writes into contiguous memory; other destinations use a temporary buffer.
+    direct = dest isa StridedVector{UInt8} && stride(dest, 1) == 1
+    direct || (dest = Vector{UInt8}(undef, length(rng)))
+    HTTP.setheader(headers, contentRange(rng))
+    # Preserve caller preconditions: adding If-Match can change how providers
+    # evaluate If-Unmodified-Since. The response ETag is checked in either case.
+    conditions = ("If-Match", "If-None-Match", "If-Modified-Since", "If-Unmodified-Since", "If-Range")
+    any(name -> HTTP.hasheader(headers, name), conditions) || HTTP.setheader(headers, "If-Match" => tag)
+    # Ranges address stored bytes. Decompression belongs after reassembly.
+    request_kw = merge(OWNED_HEADERS_KW, (; kw...), (; decompress=false))
+    # A view keeps HTTP from resizing the caller's buffer and bounds writes
+    # when the server ignores Range or sends too many bytes.
+    dest = view(dest, 1:length(rng))
+    @static if isdefined(HTTP, :BytesBody)
+        resp = getObject(store, url, headers; response_stream=dest, request_kw...)
+        # HTTP 2 sets `content_length` to the body bytes it received, not the header value.
+        nbytes = resp.content_length
+    else
+        buffer = IOBuffer(dest; write=true, maxsize=length(dest))
+        receive = function(http)
+            # Retries call this again; start each attempt at the beginning of `dest`.
+            seekstart(buffer)
+            response = HTTP.startread(http)
+            if response.status == 206
+                while !eof(http)
+                    readbytes!(http, buffer)
+                end
+            elseif response.status == 200
+                throw(ArgumentError("server ignored Range during ranged download"))
+            else
+                # Keep error and redirect bodies out of `dest` for the normal HTTP layers.
+                response.body = read(http)
+            end
+        end
+        resp = getObject(store, url, headers; response_stream=buffer, iofunction=receive, request_kw...)
+        nbytes = position(buffer)
+    end
+    resp.status == 206 || throw(ArgumentError("expected HTTP 206 for a ranged download, got $(resp.status)"))
+    range = HTTP.header(resp, "Content-Range", "")
+    parseContentRange(range) == (first(rng), last(rng), total) || throw(ArgumentError(
+        "unexpected Content-Range: $range; expected bytes $(first(rng))-$(last(rng))/$total"))
+    nbytes == length(rng) || throw(ArgumentError(
+        "incomplete ranged download: expected $(length(rng)) bytes, received $nbytes"))
+    rangeETag(HTTP.header(resp, "ETag", "")) == tag || throw(ArgumentError(
+        "object ETag changed during ranged download"))
+    direct || copyto!(target, 1, dest, 1, nbytes)
+    return nbytes
 end
 
 function check_redirect(key, resp)
@@ -194,7 +258,10 @@ function getObjectImpl(x::AbstractStore, key::Resource, out::ResponseBodyType=no
     # `headers` seeds every range request below, so HEAD gets its own copy.
     resp = API.headObject(x, url, copy(headers); kw...)
     check_redirect(key, resp)
-    contentLength = parse(Int, HTTP.header(resp, "Content-Length", "0"))
+    resp.status == 200 || throw(status_error(resp))
+    contentLength = parse(Int, HTTP.header(resp, "Content-Length", ""))
+    contentLength >= 0 || throw(ArgumentError("negative object Content-Length"))
+    tag = contentLength == 0 ? "" : rangeETag(HTTP.header(resp, "ETag", ""))
     if contentLength == 0
         # if the object is zero-length, return an "empty" version of the output type
         if out === nothing || out isa AbstractVector{UInt8}
@@ -215,7 +282,8 @@ function getObjectImpl(x::AbstractStore, key::Resource, out::ResponseBodyType=no
         res = out
         body = view(out, 1:contentLength)
     elseif out isa String
-        body = decompress ? decompressorstream(zlibng)(open(out, "w")) : open(out, "w")
+        file = open(out, "w")
+        body = decompress ? decompressorstream(zlibng)(file) : file
         buffers = BufferBatch(batchSize, partSize)
     else
         body = decompress ? decompressorstream(zlibng)(out) : out
@@ -224,38 +292,46 @@ function getObjectImpl(x::AbstractStore, key::Resource, out::ResponseBodyType=no
 
     nTasks = cld(contentLength, partSize)
     nLoops = cld(nTasks, batchSize)
-    sync = OrderedSynchronizer(1)
-    for j = 1:nLoops
-        @sync for i = 1:batchSize
-            n = (j - 1) * batchSize + i
-            n > nTasks && break
-            Threads.@spawn begin
-                _n = $n
-                _headers = copy(headers)
-                rng = ((_n - 1) * partSize):min(contentLength - 1, _n * partSize - 1)
-                HTTP.setheader(_headers, contentRange(rng))
-                if out === nothing || out isa AbstractVector{UInt8}
-                    # the Content-Range header is 0-indexed, but the view is 1-indexed
-                    _rng = (first(rng) + 1):(last(rng) + 1)
-                    # we pass just this task's slice of the overall buffer to be filled in
-                    # directly as HTTP receives the response body
-                    _res = view(res, _rng)
-                    r = getObject(x, url, _headers; response_stream=_res, kw...)
-                    Threads.atomic_add!(nbytes, parse(Int,
-                        HTTP.header(r, "Content-Length", string(length(rng)))))
-                else
-                    buf = view(buffers[$i], 1:min(partSize, length(rng)))
-                    r = getObject(x, url, _headers; response_stream=buf, kw...)
-                    Threads.atomic_add!(nbytes, parse(Int,
-                        HTTP.header(r, "Content-Length", string(length(rng)))))
-                    put!(() -> write(body, buf), sync, _n)
+    downloads = Vector{Task}(undef, min(batchSize, nTasks))
+    try
+        for j = 1:nLoops
+            count = min(batchSize, nTasks - (j - 1) * batchSize)
+            @sync begin
+                for i = 1:count
+                    n = (j - 1) * batchSize + i
+                    downloads[i] = Threads.@spawn begin
+                        _n = $n
+                        rng = ((_n - 1) * partSize):min(contentLength - 1, _n * partSize - 1)
+                        if out === nothing || out isa AbstractVector{UInt8}
+                            # The Content-Range header is 0-indexed; the view is 1-indexed.
+                            buf = view(res, (first(rng) + 1):(last(rng) + 1))
+                        else
+                            buf = view(buffers[$i], 1:length(rng))
+                        end
+                        received = getRange!(buf, x, url, headers, rng, contentLength, tag; kw...)
+                        Threads.atomic_add!(nbytes, received)
+                    end
+                end
+                # Write parts in order as they are validated while later parts
+                # download. On failure, @sync still waits for every task.
+                if !(out === nothing || out isa AbstractVector{UInt8})
+                    Threads.@spawn for i = 1:count
+                        wait(downloads[i])
+                        offset = ((j - 1) * batchSize + i - 1) * partSize
+                        write(body, view(buffers[i], 1:min(partSize, contentLength - offset)))
+                    end
                 end
             end
+            if progress !== nothing
+                progress(contentLength, nbytes[])
+                progressReported = true
+            end
         end
-        if progress !== nothing
-            progress(contentLength, nbytes[])
-            progressReported = true
-        end
+    catch
+        # Close the file itself: closing a decompressor over partial data throws
+        # and would replace the download error.
+        out isa String && close(file)
+        rethrow()
     end
 
 @label done

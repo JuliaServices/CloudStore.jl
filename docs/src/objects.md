@@ -36,7 +36,8 @@ obj = CloudStore.put(
 ```
 
 Set `allowMultipart=false` to force one request. Set `compress=true` to gzip the uploaded
-bytes. CloudStore does not add `.gz` to the key.
+bytes. CloudStore does not add `.gz` to the key, and the returned `Object` has the compressed
+size.
 
 ## Download
 
@@ -62,6 +63,14 @@ end
 Multipart downloads first read object metadata. Use `objectMaxSize` when you know an upper
 bound and want to avoid that request for a small object. Set `decompress=true` to gunzip the
 downloaded bytes.
+
+Each range response must match that metadata: the requested bytes, the object size, and
+the strong ETag. If the object changes during the download or a response is incomplete,
+`get` throws instead of returning mixed or partial data. The destination may already hold
+some of the bytes. S3 and Azure Blob Storage send strong ETags; for other endpoints, pass
+`allowMultipart=false` to make a single GET. Conditional headers you pass, such as
+`If-Match`, and query parameters in an object URL, such as `versionId`, apply to every
+request.
 
 ## Metadata and listing
 

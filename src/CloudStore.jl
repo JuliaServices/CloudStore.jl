@@ -10,7 +10,6 @@ export Object, PrefetchedDownloadStream, ResponseBodyType, RequestBodyType,
     MultipartUploadStream, abort
 
 using HTTP, CodecZlib, CodecZlibNG, Mmap, TranscodingStreams
-import WorkerUtilities: OrderedSynchronizer
 import CloudBase: AbstractStore
 using ExceptionUnwrapping
 

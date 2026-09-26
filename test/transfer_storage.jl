@@ -63,11 +63,14 @@ if isdefined(HTTP, :Client)
                     # Keep default multipart selection. Force replay after a successful
                     # first PUT; the emulator validates both attempts' signatures.
                     retry_if = (attempt, err, req, resp) -> req.method == "PUT" && attempt == 1 && resp !== nothing
-                    CloudStore.put(store, "owned", data; credentials, client, require_ssl_verification=true, headers, trace, retry_if,
+                    object = CloudStore.put(store, "owned", data; credentials, client, require_ssl_verification=true, headers, trace, retry_if,
                         retries=1, retry_bucket=HTTP.RetryBucket(backoff_scale_factor_ms=0, max_backoff_secs=0))
                     @test length(attempts) >= 2
                     @test length(Set(objectid(req.headers) for req in attempts)) == length(attempts)
                     @test collect(headers) == ["Content-Type" => "application/octet-stream"]
+                    partial = zeros(UInt8, 16)
+                    @test copyto!(partial, 1, object, 2, length(partial)) == length(partial)
+                    @test partial == data[2:17]
                     @test CloudStore.get(store, "owned"; credentials, client, require_ssl_verification=true) == data
                     out = zeros(UInt8, n)
                     @test CloudStore.get(store, "owned", out; credentials, client, require_ssl_verification=true) === out

@@ -101,7 +101,8 @@ function putObjectImpl(x::AbstractStore, key::Resource, in::RequestBodyType;
         resp = putObject(x, key, body;
             contentType, headers=transferheaders(headers), credentials, kw...)
         wbytes[] = wire_bytes
-        obj = Object(x, credentials, resourceKey(key), N, etag(HTTP.header(resp, "ETag")))
+        # The stored size, which differs from `N` when compressing.
+        obj = Object(x, credentials, resourceKey(key), wire_bytes, etag(HTTP.header(resp, "ETag")))
         @goto done
     end
     # multipart upload
@@ -161,7 +162,7 @@ function putObjectImpl(x::AbstractStore, key::Resource, in::RequestBodyType;
         end
         rethrow()
     end
-    obj = Object(x, credentials, resourceKey(key), N, eTag)
+    obj = Object(x, credentials, resourceKey(key), wbytes[], eTag)
 @label done
     end_time = time()
     bytes = wbytes[]
