@@ -67,7 +67,13 @@ function API.completeMultipartUpload(x::Bucket, url, eTags, uploadId;
     # Caller headers describe the object and were sent when the upload started.
     # The completion request carries only its XML body.
     resp = AWS.post(url, HTTP.Headers(); query=Dict("uploadId" => uploadId), body, service="s3", kw...)
-    return API.etag(HTTP.header(resp, "ETag"))
+    # S3 can return an Error body after HTTP 200 and keepalive whitespace.
+    result = xml_dict(lstrip(String(resp.body)))
+    if haskey(result, "Error")
+        failure = result["Error"]
+        error("S3 CompleteMultipartUpload failed ($(failure["Code"])): $(failure["Message"])")
+    end
+    return API.etag(result["CompleteMultipartUploadResult"]["ETag"])
 end
 
 function API.abortMultipartUpload(x::Bucket, url, uploadId; kw...)
