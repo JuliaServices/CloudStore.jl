@@ -108,7 +108,7 @@ Base.close(io::FragmentedInput) = close(io.data)
                     multipartThreshold=-1, partSize=4, batchSize=2, compress, zlibng)
                 wire = uploaded(store)
                 @test (compress ? transcode(GzipDecompressor, wire) : wire) == data
-                @test obj.size == n
+                @test obj.size == length(wire)
                 @test store.completed && !store.aborted
                 @test isopen(input)
                 @test all(part -> !isempty(part), values(store.parts))
@@ -132,7 +132,7 @@ Base.close(io::FragmentedInput) = close(io.data)
                 wire = uploaded(store)
                 @test (compress ? transcode(GzipDecompressor, wire) : wire) == data[offset+1:end]
                 @test length(store.parts) == (compress || n > offset ? 1 : 0)
-                @test obj.size == n - offset
+                @test obj.size == length(wire)
                 @test position(input) == n
                 @test isopen(input)
             end
