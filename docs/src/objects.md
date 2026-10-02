@@ -108,6 +108,41 @@ Constructing an object by key sends a metadata request:
 obj = CloudStore.Object(bucket, "reports/today.csv")
 ```
 
+## Read selected bytes
+
+[`CloudStore.ObjectBytes`](@ref) presents an object as a read-only byte vector. Indexing
+fetches one small block, and bulk copies fetch only the requested range. Contiguous
+views share one buffer and the object's version. Every request uses the same validation
+as `copyto!` from an `Object`.
+
+```julia
+bytes = CloudStore.ObjectBytes(obj) # 64 KiB buffer by default
+footer = bytes[end-7:end]          # owned Vector{UInt8}
+portion = view(bytes, 101:200)     # no request until bytes are read
+copyto!(destination, 1, portion, 1, length(portion))
+```
+
+Consumers that accept an `AbstractVector{UInt8}` can use this array directly. For
+example, install ZipArchives separately to list a remote archive and read one entry:
+
+```julia
+using CloudStore, ZipArchives
+
+obj = CloudStore.Object(bucket, "archive.zip")
+archive = ZipArchives.ZipReader(CloudStore.ObjectBytes(obj))
+names = ZipArchives.zip_names(archive)
+text = ZipArchives.zip_readentry(archive, "reports/today.csv", String)
+```
+
+ZipArchives still owns the ZIP directory and decompression. Reading one entry normally
+downloads the directory, the selected entry, and a small amount of buffered neighboring
+data. Its output size is separate from the byte view's `blocksize` bound. Calling `copy`
+on the whole byte view downloads and allocates the whole object.
+
+Views keep the shared buffer alive; no `close` is needed. Scalar reads from multiple
+tasks share a lock. Independent bulk copies can overlap. Already buffered bytes remain
+from the original object version; a later request fails if that version was replaced.
+
 ## Delete
 
 Delete one object:

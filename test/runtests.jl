@@ -1567,3 +1567,4 @@ end # @testset "CloudStore.jl"
 
 include("transfer_storage.jl")
 include("range_downloads.jl")
+include("objectbytes.jl")

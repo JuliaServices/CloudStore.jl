@@ -93,6 +93,7 @@ end # module API
 using .API
 
 include("parse.jl")
+include("objectbytes.jl")
 
 # generic dispatches
 """

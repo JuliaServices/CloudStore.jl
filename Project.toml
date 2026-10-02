@@ -25,12 +25,14 @@ Mmap = "1"
 TranscodingStreams = "0.9.12, 0.10, 0.11"
 Sockets = "1"
 XMLDict = "0.4"
+ZipArchives = "2.6"
 julia = "1.6"
 
 [extras]
 CodecZlib = "944b1d66-785c-5afd-91f1-9de20f533193"
 Sockets = "6462fe0b-24de-5631-8697-dd941f90decc"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+ZipArchives = "49080126-0e18-4c2a-b176-c102e4b3760c"
 
 [targets]
-test = ["CodecZlib", "Sockets", "Test"]
+test = ["CodecZlib", "Sockets", "Test", "ZipArchives"]

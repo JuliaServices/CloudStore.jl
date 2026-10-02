@@ -17,6 +17,7 @@ on, and as `CloudStore.Blobs.list`, `CloudStore.Blobs.get`, and so on.
 
 ```@docs
 CloudStore.Object
+CloudStore.ObjectBytes
 ```
 
 ## Transfer streams
