@@ -123,7 +123,9 @@ end
                 saved = read(checkpoint)
                 @test_throws HTTP.StatusError ManualResumeExample.resume(store, checkpoint; credentials=nothing)
                 @test read(checkpoint) == saved
-                @test only(drain_requests(requests)).method == "GET"
+                attempts = drain_requests(requests)
+                @test !isempty(attempts) && all(request -> request.method == "GET" &&
+                    manual_query(request) == Dict("comp" => "blocklist", "blocklisttype" => "uncommitted"), attempts)
             end
         end
     end
