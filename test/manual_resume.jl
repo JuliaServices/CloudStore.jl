@@ -62,6 +62,73 @@ function drain_requests(requests)
     return result
 end
 
+@testset "Azure restart after remote blocks disappear" begin
+    for acknowledged in (false, true)
+        staged = Dict{String,Vector{UInt8}}()
+        published = Ref(UInt8[])
+        handler = function(request)
+            query = manual_query(request)
+            if request.method == "GET"
+                return HTTP.Response(404, ["x-ms-error-code" => "BlobNotFound"],
+                    "<Error><Code>BlobNotFound</Code></Error>")
+            elseif query["comp"] == "block"
+                staged[query["blockid"]] = manual_bytes(request.body)
+                return HTTP.Response(201)
+            else
+                ids = XMLDict.xml_dict(String(manual_bytes(request.body)))["BlockList"]["Uncommitted"]
+                published[] = reduce(vcat, (staged[id] for id in ids))
+                return HTTP.Response(201, ["ETag" => "\"recovered\""])
+            end
+        end
+        manual_server(handler) do _, store, requests
+            # The low-level operation preserves the provider's missing-blob error.
+            @test_throws HTTP.StatusError Blobs.listblocks(store, "new-blob"; state=:uncommitted)
+            @test manual_take(requests).method == "GET"
+            mktempdir() do dir
+                source, checkpoint = joinpath(dir, "source.bin"), joinpath(dir, "upload.toml")
+                expected = vcat(fill(0x42, 5 * 1024^2), UInt8[0x00, 0x01, 0xff])
+                write(source, expected)
+                state = ManualResumeExample.start(store, "new-blob", source, checkpoint;
+                    credentials=nothing, initial=acknowledged ? (1,) : ())
+                @test length(state["receipts"]) == Int(acknowledged)
+                @test length(drain_requests(requests)) == Int(acknowledged)
+                # No first stage leaves no blob; expiry removes acknowledged blocks too.
+                empty!(staged)
+                @test ManualResumeExample.resume(store, checkpoint; credentials=nothing) == "recovered"
+                resumed = drain_requests(requests)
+                @test [request.method for request in resumed] == ["GET", "PUT", "PUT", "PUT"]
+                @test manual_query(resumed[1]) == Dict("comp" => "blocklist", "blocklisttype" => "uncommitted")
+                @test [manual_query(request)["blockid"] for request in resumed[2:3]] == [part["id"] for part in state["parts"]]
+                @test manual_query(resumed[4]) == Dict("comp" => "blocklist")
+                @test manual_header(resumed[4], "If-None-Match") == "*"
+                @test manual_header(resumed[4], "x-ms-meta-checkpoint") == state["marker"]
+                @test published[] == expected
+                completed = TOML.parsefile(checkpoint)
+                @test completed["state"] == "complete"
+                @test completed["etag"] == "recovered"
+                @test sort(collect(keys(completed["receipts"]))) == ["1", "2"]
+                @test all(completed["receipts"][string(part["number"])]["size"] == part["size"] for part in state["parts"])
+            end
+        end
+    end
+    for (status, code) in ((404, "ContainerNotFound"), (403, "AuthenticationFailed"),
+        (404, ""), (404, "blobnotfound"), (409, "BlobNotFound"))
+        manual_server(_ -> HTTP.Response(status, ["x-ms-error-code" => code],
+            "<Error><Code>$code</Code></Error>")) do _, store, requests
+            mktempdir() do dir
+                source, checkpoint = joinpath(dir, "source.bin"), joinpath(dir, "upload.toml")
+                write(source, UInt8[0x42])
+                ManualResumeExample.start(store, "new-blob", source, checkpoint;
+                    credentials=nothing, initial=())
+                saved = read(checkpoint)
+                @test_throws HTTP.StatusError ManualResumeExample.resume(store, checkpoint; credentials=nothing)
+                @test read(checkpoint) == saved
+                @test only(drain_requests(requests)).method == "GET"
+            end
+        end
+    end
+end
+
 @testset "Caller-owned multipart restart" begin
     for provider in (:s3, :azure)
         service = provider == :s3 ? CloudBase.CloudTest.Minio : CloudBase.CloudTest.Azurite
