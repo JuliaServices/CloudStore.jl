@@ -3,6 +3,7 @@
 module ManualResumeExample
 
 using CloudStore, SHA, TOML, Base64
+import HTTP
 import CloudStore: S3, Blobs
 
 digest(path) = open(io -> bytes2hex(sha256(io)), path)
@@ -103,8 +104,15 @@ function resume(store, checkpoint_path; credentials)
             end
         end
     else
-        inventory = Blobs.listblocks(store, checkpoint["key"]; state=:uncommitted, credentials)
-        listed = Dict(block.id => block.size for block in inventory.uncommitted)
+        uncommitted = try
+            Blobs.listblocks(store, checkpoint["key"]; state=:uncommitted, credentials).uncommitted
+        catch err
+            err isa HTTP.StatusError && err.status == 404 &&
+                HTTP.header(err.response, "x-ms-error-code") == "BlobNotFound" || rethrow()
+            # A blob can be absent before its first block or after uncommitted blocks expire.
+            []
+        end
+        listed = Dict(block.id => block.size for block in uncommitted)
         for (number, receipt) in collect(receipts)
             if !haskey(listed, receipt["id"])
                 delete!(receipts, number)

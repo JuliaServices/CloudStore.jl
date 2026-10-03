@@ -77,7 +77,7 @@ Uncommitted blocks expire under the provider's retention policy.
 The runnable [checkpoint example](https://github.com/JuliaServices/CloudStore.jl/blob/main/examples/manual_resume.jl)
 implements one deliberately narrow policy: one nonempty immutable local file,
 one writer, a new destination, fixed parts of at least 5 MiB, and a caller-owned
-TOML file. It uses only CloudStore and Julia standard libraries. Credentials never
+TOML file. It uses CloudStore, HTTP, and Julia standard libraries. Credentials never
 enter the checkpoint. Keep the checkpoint private and use a durable checkpoint
 store if recovery after an OS or storage failure is required; its file replacement
 does not claim crash-durable persistence.
@@ -102,6 +102,9 @@ ManualResumeExample.resume(store, "upload.toml"; credentials)
 The example checks the full source hash before network requests and each part's
 hash before uploading. It compares saved acknowledgements against provider
 inspection, fills missing or unacknowledged parts, and commits in source order.
+An Azure `BlobNotFound` response means there are no blocks to reuse, including
+before the first block was staged or after uncommitted blocks expired. The
+example uploads the verified source again; other provider errors still stop it.
 The caller must prevent concurrent source changes and checkpoint writers; hashes
 do not lock a file or make an untrusted checkpoint safe.
 
