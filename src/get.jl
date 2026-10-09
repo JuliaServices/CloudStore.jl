@@ -219,7 +219,7 @@ function getObjectImpl(x::AbstractStore, key::Resource, out::ResponseBodyType=no
         buffers = BufferBatch(batchSize, partSize)
     end
 
-    nTasks = max(1, cld(contentLength - 1, partSize))
+    nTasks = cld(contentLength, partSize)
     nLoops = cld(nTasks, batchSize)
     sync = OrderedSynchronizer(1)
     for j = 1:nLoops

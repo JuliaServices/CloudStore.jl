@@ -119,7 +119,7 @@ function CloudStore.API.getObject(
     last_byte = parse(Int, match_result[2]) + 1
     part = store.data[first_byte:last_byte]
     if response_stream !== nothing
-        copyto!(response_stream, part)
+        response_stream isa IO ? write(response_stream, part) : copyto!(response_stream, part)
     end
     request = HTTP.Request("GET", url)
     return HTTP.Response(
@@ -240,6 +240,25 @@ end
 function CloudStore.API.abortMultipartUpload(store::RecordingStore, _url, _state; kw...)
     store.aborted = true
     return nothing
+end
+
+@testset "multipart download boundaries" begin
+    for n in (1, 3, 4, 5, 7, 8, 9, 13), outtype in (nothing, Vector{UInt8}, String, IO)
+        data = collect(UInt8(1):UInt8(n))
+        out = outType(data, outtype)
+        updates = Tuple{Int,Int}[]
+        try
+            result = CloudStore.API.getObjectImpl(
+                RecordingDownloadStore(data), "data.bin", out;
+                multipartThreshold=1, partSize=4, batchSize=2,
+                progress=(total, transferred) -> push!(updates, (total, transferred)),
+            )
+            @test check(data, result)
+            @test last(updates) == (n, n)
+        finally
+            cleanup!(out)
+        end
+    end
 end
 
 @testset "transfer progress callbacks" begin
