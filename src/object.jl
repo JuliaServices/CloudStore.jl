@@ -391,7 +391,7 @@ upload. Parts upload in background tasks; when `concurrent_writes_to_channel` pa
 flight, `write` waits. Do not modify `bytes` after passing it to `write`.
 
 `close(io)` waits for every part, completes the upload, and returns the object's ETag.
-[`CloudStore.abort`](@ref) discards the upload instead. If a part or the completion fails,
+`CloudStore.abort(io)` discards the upload instead. If a part or the completion fails,
 `close` aborts the upload and rethrows. The `do`-block form calls `close` after `f(io)`
 returns, or aborts if `f` throws.
 
