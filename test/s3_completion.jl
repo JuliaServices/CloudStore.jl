@@ -1,7 +1,10 @@
 @testset "S3 multipart completion responses" begin
-    for outcome in (:success, :error), upload in (:put, :stream)
+    # :retry and :status fail the first completion attempt (InternalError in an
+    # HTTP 200 body, or HTTP 500); :error returns InternalError every time.
+    for outcome in (:success, :retry, :status, :error), upload in (:put, :stream)
         @testset "$outcome through $upload" begin
             requests = Channel{HTTP.Request}(8)
+            completions = Ref(0)
             server = HTTP.serve!(0; listenany=true, verbose=false) do request
                 put!(requests, request)
                 if request.method == "DELETE"
@@ -11,7 +14,12 @@
                 elseif occursin("uploads", request.target)
                     return HTTP.Response(200, [],
                         "<InitiateMultipartUploadResult><UploadId>upload-id</UploadId></InitiateMultipartUploadResult>")
-                elseif outcome == :success
+                end
+                completions[] += 1
+                failed = outcome == :error || (outcome != :success && completions[] == 1)
+                if failed && outcome == :status
+                    return HTTP.Response(500, [], "<Error><Code>InternalError</Code></Error>")
+                elseif !failed
                     return HTTP.Response(200, [], " \n\t" * """
                         <?xml version="1.0" encoding="UTF-8"?>
                         <CompleteMultipartUploadResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
@@ -48,7 +56,7 @@
                 catch exception
                     exception
                 end
-                if outcome == :success
+                if outcome != :error
                     @test result == "object-etag"
                     if stream !== nothing
                         @test stream.closed
@@ -69,7 +77,9 @@
                 close(requests)
                 observed = collect(requests)
                 @test [request.method for request in observed] ==
-                    (outcome == :success ? ["POST", "PUT", "POST"] : ["POST", "PUT", "POST", "DELETE"])
+                    (outcome == :success ? ["POST", "PUT", "POST"] :
+                     outcome == :error ? ["POST", "PUT", "POST", "POST", "POST", "DELETE"] :
+                     ["POST", "PUT", "POST", "POST"])
                 @test String(observed[2].body) == String(copy(data))
                 @test occursin("uploadId=upload-id", observed[3].target)
                 @test occursin("part-etag", String(observed[3].body))
