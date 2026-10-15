@@ -179,61 +179,22 @@ _ndownload_tasks(total_size, part_size, numthreads=Threads.nthreads()) =
     min(numthreads, max(1, div(total_size, part_size, RoundUp)))
 
 """
-    PrefetchedDownloadStream{T <: Object} <: IO
-    PrefetchedDownloadStream(args...; kwargs...) -> PrefetchedDownloadStream{T <: Object}
+    PrefetchedDownloadStream(object::CloudStore.Object, prefetch_size=32 * 1024^2; prefetch_multipart_size=8 * 1024^2, kwargs...)
+    PrefetchedDownloadStream(store, key, prefetch_size=32 * 1024^2; credentials=nothing, prefetch_multipart_size=8 * 1024^2, kwargs...)
 
-A buffered, read-only, in-memory IO stream that fetches chunks from remote cloud `Object`.
+A read-only `IO` over a remote object that downloads ahead of the reader. Two buffers of
+`prefetch_size` bytes alternate: while you read one, background tasks fill the other with
+range requests of at most `prefetch_multipart_size` bytes, using up to
+`Threads.nthreads()` tasks.
 
-Data is downloaded to two internal buffers. Once you start reading from the first buffer,
-a secondary buffer will begin to be "prefetched" by multiple background tasks. Once you read
-past the first buffer, the two buffers are switched and new round of prefetching begins.
+Every range must match the object's size and strong ETag, so a changed object raises an
+error. The stream returns the stored bytes; wrap it in a decompressor such as
+`CodecZlib.GzipDecompressorStream` for gzip objects. Do not read from several tasks at
+once. Other keyword arguments are passed to the HTTP requests.
 
-To control memory usage and speed, the user can change two parameters when constructing the
-stream: `prefetch_multipart_size` and `prefetch_size`. `prefetch_multipart_size` is the max
-size of any individual GET request in bytes (default $(Base.format_bytes(DEFAULT_PREFETCH_MULTIPART_SIZE))),
-`prefetch_size` is the size of a buffer that stores the fetched bytes and which is iterated
-when we consume/read the IO (default $(Base.format_bytes(DEFAULT_PREFETCH_SIZE))).
-
-The number of spawned tasks is also governed by these two parameters, with approximately
-`prefetch_size` / `prefetch_multipart_size` tasks spawned for performing the GET requests
-(defaults to 4 if those fields aren't specified) + 1 task is spawned to coordinate the
-prefetching process. Number of spawned tasks is upper-bounded by the size of the input and
-the number of threads available (see the internal `_ndownload_tasks` helper function).
-
-**Reading from this stream is not thread-safe**.
-
-Range responses must match the object's size and strong ETag. A changed object
-or incomplete range raises an error. Bytes are read without HTTP decompression;
-wrap this stream in a decompressor when needed.
-
-# Arguments
-* `store::AbstractStore`: The S3 Bucket / Azure Container object
-* `key::String`: S3 key / Azure blob resource name
-* `prefetch_size::Int=DEFAULT_PREFETCH_SIZE`: The size of each of the two internal prefetch
-    buffers in bytes
-
-# Keywords
-* `credentials::Union{CloudCredentials, Nothing}=nothing`: Credentials object used in HTTP
-    requests
-* `prefetch_multipart_size::Int=DEFAULT_PREFETCH_MULTIPART_SIZE`: The size of each individual
-   GET request in bytes
-* `kwargs...`: HTTP keyword arguments are forwarded to underlying HTTP requests,
-
-## Examples
-```
-# Get an IO stream for a remote CSV file `test.csv` living in your S3 bucket
-io = PrefetchedDownloadStream(my_bucket, "test.csv"; credentials)
-
-# Integrates with TranscodingStreams; HTTP keyword arguments are forwarded to underlying HTTP requests
-using CodecZlib
-io = GzipDecompressorStream(
-    PrefetchedDownloadStream(my_bucket, "test.csv.gz"; credentials, retries=5)
-)
-
-# Up to 8 concurrent download tasks, each fetching 2MiB into 16MiB prefetch buffer.
-io = PrefetchedDownloadStream(
-    my_bucket, "test.csv", 16*1024*1024; credentials, prefetch_multipart_size=2*1024*1024)
-)
+```julia
+io = PrefetchedDownloadStream(bucket, "data.csv.gz"; credentials)
+text = read(GzipDecompressorStream(io), String)
 ```
 """
 mutable struct PrefetchedDownloadStream{T <: Object} <: IO
@@ -422,62 +383,20 @@ function _upload_task(io; kw...)
 end
 
 """
-This is an *experimental* API.
+    MultipartUploadStream(store, key; credentials=nothing, concurrent_writes_to_channel=4 * Threads.nthreads(), kwargs...)
+    MultipartUploadStream(f, store, key; kwargs...)
 
-    MultipartUploadStream <: IO
-    MultipartUploadStream(args...; kwargs...) -> MultipartUploadStream
+An `IO` that uploads each `write(io, bytes::Vector{UInt8})` as the next part of a multipart
+upload. Parts upload in background tasks; when `concurrent_writes_to_channel` parts are in
+flight, `write` waits. Do not modify `bytes` after passing it to `write`.
 
- An in-memory IO stream that uploads chunks to a URL in blob storage.
+`close(io)` waits for every part, completes the upload, and returns the object's ETag.
+[`CloudStore.abort`](@ref) discards the upload instead. If a part or the completion fails,
+`close` aborts the upload and rethrows. The `do`-block form calls `close` after `f(io)`
+returns, or aborts if `f` throws.
 
-For every data chunk we call write(io, data;) to write it to a channel. We spawn one task
-per chunk to read data from this channel and uploads it as a distinct part to blob storage
-to the same remote object.
-We expect the chunks to be written in order.
-For cases where there is no need to upload data in parts or the data size is too small, `put`
-can be used instead.
-
-# Arguments
-* `store::AbstractStore`: The S3 Bucket / Azure Container object
-* `key::String`: S3 key / Azure blob resource name
-
-# Keywords
-* `credentials::Union{CloudCredentials, Nothing}=nothing`: Credentials object used in HTTP
-    requests
-* `concurrent_writes_to_channel::Int=(4 * Threads.nthreads())`: represents the max number of
-    chunks in flight. Defaults to 4 times the number of threads. We use this value to
-    initialize a semaphore to perform throttling in case the writing to the channel is much
-    faster to uploading to blob storage, i.e. `write` will block as a result of this limit
-    being reached.
-* `kwargs...`: HTTP keyword arguments are forwarded to underlying HTTP requests,
-
-## Examples
-```
-# Get an IO stream for a remote CSV file `test.csv` living in your S3 bucket
-io = MultipartUploadStream(bucket, "test.csv"; credentials)
-
-# Write a chunk of data (Vector{UInt8}) to the stream
-write(io, data;)
-
-# Wait for all chunks to be uploaded
-wait(io)
-
-# Close the stream
-close(io; credentials)
-
-# Alternative syntax that encapsulates all these steps
-MultipartUploadStream(bucket, "test.csv"; credentials) do io
-    write(io, data;)
-end
-```
-
-## Note on upload size
-```
-Some cloud storage providers might have a lower limit on the size of the uploaded object.
-For example it seems that S3 requires at minimum an upload of 5MB:
-https://github.com/minio/minio/issues/11076.
-We haven't found a similar setting for Azure.
-For such cases where the size of the data is too small, one can use `put`
-```
+On S3 every part except the last must be at least 5 MiB; use `CloudStore.put` for smaller
+objects. Other keyword arguments are passed to the HTTP requests. This API is experimental.
 """
 mutable struct MultipartUploadStream{T <: AbstractStore} <: IO
     store::T
