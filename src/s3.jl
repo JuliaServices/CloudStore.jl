@@ -74,20 +74,26 @@ function API.completeMultipartUpload(x::Bucket, url, eTags, uploadId;
     contentType=nothing, headers=HTTP.Headers(), kw...)
     body = XMLDict.node_xml("CompleteMultipartUpload", Dict("Part" => [Dict("PartNumber" => string(i), "ETag" => eTag) for (i, eTag) in enumerate(eTags)]))
     # Caller headers describe the object and were sent when the upload started.
-    # The completion request carries only its XML body.
-    return completeupload(url, uploadId, body; kw...)
+    # The completion request carries only its XML body. S3 asks clients to retry a
+    # failed completion; an upload ID completes at most once, so a retry cannot
+    # publish different data.
+    return completeupload(url, uploadId, body; attempts=3, retry_non_idempotent=true, kw...)
 end
 
-function completeupload(url, uploadId, body; headers=HTTP.Headers(), kw...)
-    resp = AWS.post(url, headers; query=Dict("uploadId" => uploadId), body, service="s3", kw...)
-    API.multipartresponse(resp)
-    # S3 can return an Error body after HTTP 200 and keepalive whitespace.
-    result = xml_dict(lstrip(String(resp.body)))
-    if haskey(result, "Error")
+# `attempts` bounds retries of an InternalError sent in an HTTP 200 body.
+function completeupload(url, uploadId, body; headers=HTTP.Headers(), attempts=1, kw...)
+    for attempt in 1:attempts
+        resp = AWS.post(url, headers; query=Dict("uploadId" => uploadId), body, service="s3", kw...)
+        API.multipartresponse(resp)
+        # S3 can return an Error body after HTTP 200 and keepalive whitespace.
+        result = xml_dict(lstrip(String(resp.body)))
+        haskey(result, "Error") || return API.etag(result["CompleteMultipartUploadResult"]["ETag"])
         failure = result["Error"]
-        error("S3 CompleteMultipartUpload failed ($(failure["Code"])): $(failure["Message"])")
+        if failure["Code"] != "InternalError" || attempt == attempts
+            error("S3 CompleteMultipartUpload failed ($(failure["Code"])): $(failure["Message"])")
+        end
+        sleep(0.1 * attempt)
     end
-    return API.etag(result["CompleteMultipartUploadResult"]["ETag"])
 end
 
 const CHECKSUM_FIELDS = ("ChecksumCRC32", "ChecksumCRC32C", "ChecksumCRC64NVME",
