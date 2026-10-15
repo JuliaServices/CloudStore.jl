@@ -75,6 +75,18 @@ function _read(body::Base.GenericIOBuffer, n)
     return uploadbytes(res)
 end
 
+_read(body, n, buffers, index) = _read(body, n)
+
+function _read(body::Union{IOStream,TranscodingStream}, n, buffers, index)
+    if index > length(buffers)
+        # Like read(io, typemax(Int)), start small and let readbytes! grow to EOF.
+        push!(buffers, Vector{UInt8}(undef, n == typemax(Int) ? 1024 : n))
+    end
+    buffer = buffers[index]
+    nb = readbytes!(body, buffer, n)
+    return view(buffer, 1:nb)
+end
+
 compressorstream(zlibng) = zlibng ? CodecZlibNG.GzipCompressorStream : CodecZlib.GzipCompressorStream
 compressor(zlibng) = zlibng ? CodecZlibNG.GzipCompressor : CodecZlib.GzipCompressor
 
@@ -115,13 +127,16 @@ function putObjectImpl(x::AbstractStore, key::Resource, in::RequestBodyType;
         body = prepBodyMultipart(in, compress, zlibng)
         partNumber = 0
         try
+            # A slot is refilled only after @sync joins the preceding batch,
+            # including every retry that can still read its payload.
+            buffers = Vector{UInt8}[]
             # Compression can make incompressible input larger than its source, so the
             # source byte count cannot safely bound the number of output parts.
             while !eof(body)
                 parts = Tuple{Int,Any}[]
-                for _ = 1:batchSize
+                for index = 1:batchSize
                     eof(body) && break
-                    part = _read(body, partSize)
+                    part = _read(body, partSize, buffers, index)
                     isempty(part) && break
                     partNumber += 1
                     push!(parts, (partNumber, part))
