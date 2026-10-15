@@ -187,6 +187,18 @@ end
     end
 end
 
+@testset "head reports the object size" begin
+    with_range_fixture() do host, requests
+        for (store, credentials) in range_stores(host)
+            headers = HTTP.Headers(["X-Custom" => "retained"])
+            meta = CloudStore.head(store, "data"; credentials, headers, retries=0)
+            @test any(((k, v),) -> lowercase(k) == "content-length" && v == "12", meta)
+            @test !haskey(last(requests).headers, "range")
+            @test collect(headers) == ["X-Custom" => "retained"]
+        end
+    end
+end
+
 @testset "Range bounds, metadata refresh and caller controls" begin
     with_range_fixture() do host, requests
         for (store, credentials) in range_stores(host)
