@@ -58,7 +58,9 @@ function with_range_fixture(f, mode=:valid; data=collect(codeunits("abcdefghijkl
                         tag = "\"v2\""
                         body = .~body
                         if mode == :changed && get(headers, "if-match", "") == "\"v1\""
-                            status, body = 412, UInt8[]
+                            # Providers explain failures in a body larger than small ranges.
+                            status, body = 412, collect(codeunits(
+                                "<Error><Code>PreconditionFailed</Code><Message>" * "x"^200 * "</Message></Error>"))
                         end
                     elseif mode == :status_retry && attempt == 1
                         status, body = 503, UInt8[]
@@ -221,6 +223,23 @@ end
             headers = HTTP.Headers(["Range" => "bytes=4-7", "If-Match" => "\"v1\""])
             @test CloudStore.get(store, "data"; credentials, headers,
                 allowMultipart=false, retries=0) == codeunits("efgh")
+        end
+    end
+end
+
+@testset "Ranged download error status" begin
+    # The error body is larger than the destination and must not be written into it.
+    with_range_fixture(:changed) do host, requests
+        for (store, credentials) in range_stores(host)
+            object = CloudStore.Object(store, credentials, "data", 12, "v1")
+            dest = fill(0xff, 4)
+            err = try
+                copyto!(dest, 1, object, 5, 4)
+            catch e
+                e
+            end
+            @test err isa HTTP.StatusError && err.status == 412
+            @test all(==(0xff), dest)
         end
     end
 end

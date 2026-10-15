@@ -26,10 +26,8 @@ defaultBatchSize() = 4 * Threads.nthreads()
 # `HTTP.Headers(::HTTP.Headers)` copies on both HTTP 1 and HTTP 2.
 transferheaders(headers) = headers === nothing ? HTTP.Headers() : HTTP.Headers(headers)
 
-# HTTP 1 and HTTP 2 releases whose `HTTP.Request` accepts `copyheaders` honor
-# `copyheaders=false`. HTTP 2.0 through 2.7 accept the keyword, ignore it, and warn.
-const OWNED_HEADERS_KW = !isdefined(HTTP, :BytesBody) || hasmethod(HTTP.Request, Tuple{String,String}, (:copyheaders,)) ?
-    (copyheaders=false,) : NamedTuple()
+# Requests receive a fresh header collection, so HTTP does not need to copy it again.
+const OWNED_HEADERS_KW = (copyheaders=false,)
 
 const ResponseBodyType = Union{Nothing, AbstractVector{UInt8}, String, IO}
 const RequestBodyType = Union{AbstractVector{UInt8}, String, IO}
