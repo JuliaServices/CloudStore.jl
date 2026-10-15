@@ -272,9 +272,10 @@ end
             partial = zeros(UInt8, 4)
             @test copyto!(partial, 1, object, 3, 4) == 4
             @test partial == compressed[3:6]
-            for decompress in (false, true), output in (nothing, zeros(UInt8, length(plain)), IOBuffer(), tempname())
+            for decompress in (false, true), allowMultipart in (true, false),
+                    output in (nothing, zeros(UInt8, length(plain)), IOBuffer(), tempname())
                 try
-                    result = CloudStore.get(store, "data", output; credentials, decompress,
+                    result = CloudStore.get(store, "data", output; credentials, decompress, allowMultipart,
                         multipartThreshold=1, partSize=7, batchSize=3, retries=0)
                     actual = result isa IO ? take!(result) : result isa String ? read(result) : result
                     @test actual == (decompress ? plain : compressed)
