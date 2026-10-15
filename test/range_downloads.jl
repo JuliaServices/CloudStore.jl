@@ -178,6 +178,15 @@ end
     end
 end
 
+@testset "Single GET without Content-Length" begin
+    with_range_fixture(:chunked) do host, requests
+        for (store, credentials) in range_stores(host), output in (nothing, zeros(UInt8, 20), IOBuffer())
+            result = CloudStore.get(store, "data", output; credentials, allowMultipart=false, retries=0)
+            @test (result isa IO ? take!(result) : result) == codeunits("abcdefghijkl")
+        end
+    end
+end
+
 @testset "Range bounds, metadata refresh and caller controls" begin
     with_range_fixture() do host, requests
         for (store, credentials) in range_stores(host)

@@ -116,6 +116,15 @@ function getRange!(dest, store, url, headers, rng, total, tag; kw...)
     return nbytes
 end
 
+# Body bytes received. A chunked response has no Content-Length, and HTTP 1 before
+# 1.10 does not record the count.
+@static if isdefined(HTTP, :BytesBody)
+    receivedbytes(resp) = Int(resp.content_length)
+else
+    receivedbytes(resp) = get(() -> parse(Int, HTTP.header(resp, "Content-Length", "0")),
+        resp.request.context, :nbytes)
+end
+
 function check_redirect(key, resp)
     if is_redirect_response(resp)
         try
@@ -248,7 +257,7 @@ function getObjectImpl(x::AbstractStore, key::Resource, out::ResponseBodyType=no
             end
         end
         check_redirect(key, resp)
-        nbytes[] = parse(Int, HTTP.header(resp, "Content-Length", "0"))
+        nbytes[] = receivedbytes(resp)
         @goto done
     end
 
