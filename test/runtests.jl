@@ -272,6 +272,23 @@ end
     end
 end
 
+@testset "open file upload size" begin
+    # Larger than an IOStream's read buffer, so `bytesavailable` would undercount it.
+    data = rand(UInt8, 100_000)
+    mktemp() do path, io
+        write(io, data)
+        seek(io, 10)
+        store = RecordingStore()
+        updates = Tuple{Int,Int}[]
+        CloudStore.API.putObjectImpl(store, "file.bin", io;
+            multipartThreshold=50_000, partSize=40_000, batchSize=2,
+            progress=(total, transferred) -> push!(updates, (total, transferred)))
+        @test !haskey(store.parts, 0)
+        @test reduce(vcat, [store.parts[i] for i in 1:3]) == data[11:end]
+        @test last(updates) == (99_990, 99_990)
+    end
+end
+
 @testset "transfer progress callbacks" begin
     data = collect(UInt8(1):UInt8(10))
     download_updates = Tuple{Int,Int}[]
