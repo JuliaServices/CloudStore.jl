@@ -5,9 +5,9 @@ continue an upload in another process. The application owns the remote upload,
 source identity, successful receipts, checkpoint, and decision to publish or
 abandon it. No operation starts background work or automatically aborts on error.
 
-For ordinary uploads, keep using `CloudStore.put` or
-[`CloudStore.MultipartUploadStream`](@ref). Their existing cleanup behavior still
-applies: an aborted managed upload is not a resumable checkpoint.
+For ordinary uploads, use `CloudStore.put` or
+[`CloudStore.MultipartUploadStream`](@ref). They abort a failed upload, so it
+cannot be resumed.
 
 ## Provider operations
 
@@ -42,8 +42,8 @@ Save the exact S3 receipt from every successful upload: `number`, quoted opaque
 `etag`, byte `size`, and optional `checksums`. Completion requires strictly
 increasing, unique part numbers and does not renumber them. Checksum metadata is
 preserved for completion; CloudStore does not calculate or verify those checksums.
-The object ETag returned by completion has its surrounding quotes removed, matching
-the existing upload API. A listing adds `last_modified`, but should not replace the
+The object ETag returned by completion has its surrounding quotes removed, as
+with `CloudStore.put`. A listing adds `last_modified`, but should not replace the
 application's acknowledgement ledger. If a part reached the server before its
 receipt was saved, upload the verified same bytes under the same number again.
 [S3 multipart lifecycle](https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpuoverview.html)
