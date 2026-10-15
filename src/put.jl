@@ -1,6 +1,8 @@
 nbytes(x::AbstractVector{UInt8}) = length(x)
 nbytes(x::String) = filesize(x)
 nbytes(x::Base.GenericIOBuffer) = x.size - x.ptr + 1
+# `bytesavailable` only counts an IOStream's read buffer, not the rest of the file.
+nbytes(x::IOStream) = filesize(x) - position(x)
 nbytes(x::IO) = eof(x) ? 0 : bytesavailable(x)
 
 """
