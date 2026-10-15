@@ -192,7 +192,9 @@ function getObjectImpl(x::AbstractStore, key::Resource, out::ResponseBodyType=no
         batchSize > 0 || throw(ArgumentError("batchSize must be > 0"))
     end
     headers = transferheaders(headers)
-    kw = merge(OWNED_HEADERS_KW, (; kw...))
+    # Every request returns stored bytes, as ranged reads must; `decompress` above
+    # is applied afterwards.
+    kw = merge(OWNED_HEADERS_KW, (; kw...), (; decompress=false))
     start_time = time()
     url = makeURL(x, key)
     # setup return type
