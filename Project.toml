@@ -1,7 +1,7 @@
 name = "CloudStore"
 uuid = "3365d9ee-d53b-4a56-812d-5344d5b716d7"
 authors = ["quinnj <quinn.jacobd@gmail.com>"]
-version = "1.8.0"
+version = "1.9.0"
 
 [deps]
 Base64 = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
@@ -20,17 +20,23 @@ CloudBase = "1"
 CodecZlib = "0.7"
 CodecZlibNG = "0.1, 0.2"
 ExceptionUnwrapping = "0.1"
-HTTP = "1.7, 2"
+HTTP = "1.7, 2.9"
 Mmap = "1"
 TranscodingStreams = "0.9.12, 0.10, 0.11"
 Sockets = "1"
+SHA = "0.7, 1"
+TOML = "1"
 XMLDict = "0.4"
+ZipArchives = "2.6"
 julia = "1.6"
 
 [extras]
 CodecZlib = "944b1d66-785c-5afd-91f1-9de20f533193"
 Sockets = "6462fe0b-24de-5631-8697-dd941f90decc"
+SHA = "ea8e919c-243c-51af-8825-aaa63cd721ce"
+TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+ZipArchives = "49080126-0e18-4c2a-b176-c102e4b3760c"
 
 [targets]
-test = ["CodecZlib", "Sockets", "Test"]
+test = ["CodecZlib", "Sockets", "Test", "SHA", "TOML", "ZipArchives"]

@@ -4,9 +4,14 @@ import CloudStore: S3, Blobs
 using CodecZlib
 import HTTP
 import Sockets
+include("upload_buffers.jl")
 using HTTP: ConnectError, StatusError
-using Sockets: DNSError, IPv4, listenany
+using Sockets: DNSError
 using ExceptionUnwrapping: unwrap_exception
+
+include("s3_completion.jl")
+include("manual_multipart.jl")
+include("manual_resume.jl")
 
 bytes(x) = codeunits(x)
 
@@ -157,13 +162,12 @@ end
 end
 
 @testset "signed URL request targets" begin
-    port, socket = listenany(IPv4(0), 20_000)
-    close(socket)
     targets = Channel{String}(4)
-    server = HTTP.serve!(port; verbose=false) do request
+    server = HTTP.serve!(0; listenany=true, verbose=false) do request
         put!(targets, request.target)
         return HTTP.Response(200, ["Content-Length" => "2"], "ok")
     end
+    port = HTTP.port(server)
     try
         s3_query = "X-Amz-Signature=a%2Fb&X-Amz-SignedHeaders=host"
         @test S3.get(
@@ -198,13 +202,12 @@ end
 end
 
 @testset "object existence" begin
-    port, socket = Sockets.listenany(Sockets.IPv4(0), 20_000)
-    close(socket)
-    server = HTTP.serve!(port; verbose=false) do request
+    server = HTTP.serve!(0; listenany=true, verbose=false) do request
         status = endswith(request.target, "/present") ? 200 :
             endswith(request.target, "/missing") ? 404 : 403
         return HTTP.Response(status)
     end
+    port = HTTP.port(server)
     try
         bucket = S3.Bucket("bucket-name", "us-east-1"; host="http://127.0.0.1:$port")
         @test S3.exists(bucket, "present")
@@ -268,6 +271,23 @@ end
         finally
             cleanup!(out)
         end
+    end
+end
+
+@testset "open file upload size" begin
+    # Larger than an IOStream's read buffer, so `bytesavailable` would undercount it.
+    data = rand(UInt8, 100_000)
+    mktemp() do path, io
+        write(io, data)
+        seek(io, 10)
+        store = RecordingStore()
+        updates = Tuple{Int,Int}[]
+        CloudStore.API.putObjectImpl(store, "file.bin", io;
+            multipartThreshold=50_000, partSize=40_000, batchSize=2,
+            progress=(total, transferred) -> push!(updates, (total, transferred)))
+        @test !haskey(store.parts, 0)
+        @test reduce(vcat, [store.parts[i] for i in 1:3]) == data[11:end]
+        @test last(updates) == (99_990, 99_990)
     end
 end
 
@@ -1567,3 +1587,4 @@ end # @testset "CloudStore.jl"
 
 include("transfer_storage.jl")
 include("range_downloads.jl")
+include("objectbytes.jl")

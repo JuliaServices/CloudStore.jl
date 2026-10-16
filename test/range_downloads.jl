@@ -58,7 +58,9 @@ function with_range_fixture(f, mode=:valid; data=collect(codeunits("abcdefghijkl
                         tag = "\"v2\""
                         body = .~body
                         if mode == :changed && get(headers, "if-match", "") == "\"v1\""
-                            status, body = 412, UInt8[]
+                            # Providers explain failures in a body larger than small ranges.
+                            status, body = 412, collect(codeunits(
+                                "<Error><Code>PreconditionFailed</Code><Message>" * "x"^200 * "</Message></Error>"))
                         end
                     elseif mode == :status_retry && attempt == 1
                         status, body = 503, UInt8[]
@@ -176,6 +178,27 @@ end
     end
 end
 
+@testset "Single GET without Content-Length" begin
+    with_range_fixture(:chunked) do host, requests
+        for (store, credentials) in range_stores(host), output in (nothing, zeros(UInt8, 20), IOBuffer())
+            result = CloudStore.get(store, "data", output; credentials, allowMultipart=false, retries=0)
+            @test (result isa IO ? take!(result) : result) == codeunits("abcdefghijkl")
+        end
+    end
+end
+
+@testset "head reports the object size" begin
+    with_range_fixture() do host, requests
+        for (store, credentials) in range_stores(host)
+            headers = HTTP.Headers(["X-Custom" => "retained"])
+            meta = CloudStore.head(store, "data"; credentials, headers, retries=0)
+            @test any(((k, v),) -> lowercase(k) == "content-length" && v == "12", meta)
+            @test !haskey(last(requests).headers, "range")
+            @test collect(headers) == ["X-Custom" => "retained"]
+        end
+    end
+end
+
 @testset "Range bounds, metadata refresh and caller controls" begin
     with_range_fixture() do host, requests
         for (store, credentials) in range_stores(host)
@@ -225,6 +248,23 @@ end
     end
 end
 
+@testset "Ranged download error status" begin
+    # The error body is larger than the destination and must not be written into it.
+    with_range_fixture(:changed) do host, requests
+        for (store, credentials) in range_stores(host)
+            object = CloudStore.Object(store, credentials, "data", 12, "v1")
+            dest = fill(0xff, 4)
+            err = try
+                copyto!(dest, 1, object, 5, 4)
+            catch e
+                e
+            end
+            @test err isa HTTP.StatusError && err.status == 412
+            @test all(==(0xff), dest)
+        end
+    end
+end
+
 @testset "Ranged download retry destination" begin
     modes = isdefined(HTTP, :BytesBody) ? (:status_retry,) : (:status_retry, :truncated_retry)
     for mode in modes
@@ -253,9 +293,10 @@ end
             partial = zeros(UInt8, 4)
             @test copyto!(partial, 1, object, 3, 4) == 4
             @test partial == compressed[3:6]
-            for decompress in (false, true), output in (nothing, zeros(UInt8, length(plain)), IOBuffer(), tempname())
+            for decompress in (false, true), allowMultipart in (true, false),
+                    output in (nothing, zeros(UInt8, length(plain)), IOBuffer(), tempname())
                 try
-                    result = CloudStore.get(store, "data", output; credentials, decompress,
+                    result = CloudStore.get(store, "data", output; credentials, decompress, allowMultipart,
                         multipartThreshold=1, partSize=7, batchSize=3, retries=0)
                     actual = result isa IO ? take!(result) : result isa String ? read(result) : result
                     @test actual == (decompress ? plain : compressed)

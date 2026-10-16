@@ -77,6 +77,10 @@ Keep that storage unchanged until the call returns, including retries. Files,
 other `IO` inputs, and compressed uploads use extra buffers. On HTTP 1, views
 over non-`Array` storage (such as string bytes) are copied first.
 
+File and compressed multipart uploads read parts into at most `batchSize` reusable
+buffers. A buffer is refilled only after every upload in its batch, including
+retries, has finished. Other `IO` inputs allocate a new buffer for each part.
+
 `CloudStore.get(store, key, destination)` accepts a byte vector or a writable
 byte view. Multipart downloads give each concurrent range request its own part
 of the destination. File and `IO` outputs use bounded part buffers and write each

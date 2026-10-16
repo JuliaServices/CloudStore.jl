@@ -22,15 +22,14 @@ function listObjectsImpl(x::AbstractStore;
     return contents
 end
 
+# `multipartThreshold` and `allowMultipart` mirror `get` and are ignored: a ranged
+# HEAD reports the range length as Content-Length (S3 also rejects it for empty objects).
 function headObjectImpl(x::AbstractStore, key::Resource;
     multipartThreshold::Int=MULTIPART_THRESHOLD,
     allowMultipart::Bool=true,
-    headers=HTTP.Headers(), kw...)
-    url = makeURL(x, key)
-    if allowMultipart
-        HTTP.setheader(headers, contentRange(0:(multipartThreshold - 1)))
-    end
-    return Dict(headObject(x, url, headers; kw...).headers)
+    headers=nothing, kw...)
+    resp = headObject(x, makeURL(x, key), transferheaders(headers); kw...)
+    return Dict(resp.headers)
 end
 
 function existsObjectImpl(x::AbstractStore, key::Resource;
@@ -116,6 +115,15 @@ function getRange!(dest, store, url, headers, rng, total, tag; kw...)
     return nbytes
 end
 
+# Body bytes received. A chunked response has no Content-Length, and HTTP 1 before
+# 1.10 does not record the count.
+@static if isdefined(HTTP, :BytesBody)
+    receivedbytes(resp) = Int(resp.content_length)
+else
+    receivedbytes(resp) = get(() -> parse(Int, HTTP.header(resp, "Content-Length", "0")),
+        resp.request.context, :nbytes)
+end
+
 function check_redirect(key, resp)
     if is_redirect_response(resp)
         try
@@ -192,7 +200,9 @@ function getObjectImpl(x::AbstractStore, key::Resource, out::ResponseBodyType=no
         batchSize > 0 || throw(ArgumentError("batchSize must be > 0"))
     end
     headers = transferheaders(headers)
-    kw = merge(OWNED_HEADERS_KW, (; kw...))
+    # Every request returns stored bytes, as ranged reads must; `decompress` above
+    # is applied afterwards.
+    kw = merge(OWNED_HEADERS_KW, (; kw...), (; decompress=false))
     start_time = time()
     url = makeURL(x, key)
     # setup return type
@@ -246,7 +256,7 @@ function getObjectImpl(x::AbstractStore, key::Resource, out::ResponseBodyType=no
             end
         end
         check_redirect(key, resp)
-        nbytes[] = parse(Int, HTTP.header(resp, "Content-Length", "0"))
+        nbytes[] = receivedbytes(resp)
         @goto done
     end
 
