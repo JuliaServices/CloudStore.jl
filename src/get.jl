@@ -22,15 +22,14 @@ function listObjectsImpl(x::AbstractStore;
     return contents
 end
 
+# `multipartThreshold` and `allowMultipart` mirror `get` and are ignored: a ranged
+# HEAD reports the range length as Content-Length (S3 also rejects it for empty objects).
 function headObjectImpl(x::AbstractStore, key::Resource;
     multipartThreshold::Int=MULTIPART_THRESHOLD,
     allowMultipart::Bool=true,
-    headers=HTTP.Headers(), kw...)
-    url = makeURL(x, key)
-    if allowMultipart
-        HTTP.setheader(headers, contentRange(0:(multipartThreshold - 1)))
-    end
-    return Dict(headObject(x, url, headers; kw...).headers)
+    headers=nothing, kw...)
+    resp = headObject(x, makeURL(x, key), transferheaders(headers); kw...)
+    return Dict(resp.headers)
 end
 
 function existsObjectImpl(x::AbstractStore, key::Resource;
