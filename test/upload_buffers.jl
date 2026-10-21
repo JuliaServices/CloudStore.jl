@@ -1,7 +1,7 @@
 module UploadBufferTests
 
 using Test, CloudStore, CodecZlib
-using CloudBase.CloudTest: Minio, Azurite
+using CloudBaseTest: Minio, Azurite
 import CloudBase
 import HTTP, Sockets
 const API = CloudStore.API

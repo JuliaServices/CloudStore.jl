@@ -1,4 +1,4 @@
-using Test, CloudStore, CloudBase.CloudTest
+using Test, CloudStore, CloudBaseTest
 import CloudBase
 import CloudStore: S3, Blobs
 using CodecZlib

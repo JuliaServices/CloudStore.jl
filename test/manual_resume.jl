@@ -133,7 +133,7 @@ end
 
 @testset "Caller-owned multipart restart" begin
     for provider in (:s3, :azure)
-        service = provider == :s3 ? CloudBase.CloudTest.Minio : CloudBase.CloudTest.Azurite
+        service = provider == :s3 ? CloudBaseTest.Minio : CloudBaseTest.Azurite
         options = provider == :s3 ? NamedTuple() : (use_ssl=false,)
         service.with(; options...) do config
             multipart_proxy(config) do store, host, requests, lose_commit_response

@@ -1,6 +1,6 @@
 module CloudStore
 
-import CloudBase: AWS, Azure, CloudTest
+import CloudBase: AWS, Azure
 
 # convenience module that holds consts, utils, and functions to overload
 # for specific clouds
