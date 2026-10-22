@@ -60,10 +60,33 @@ function rangeETag(tag)
     return value
 end
 
+@static if isdefined(HTTP, :BytesBody)
+    # HTTP 2 retries a request only until its response head arrives. These errors can end
+    # a body midway; the range is fetched again (If-Match pins the object version).
+    const BODY_ERRORS = Union{HTTP.ParseError, HTTP.ProtocolError, HTTP.TimeoutError,
+        HTTP.TLSTransportError, HTTP.H2GoAwayError, HTTP.H2StreamResetError, Base.IOError, EOFError}
+    const RANGE_ATTEMPTS = 3
+else
+    # HTTP 1 retries the whole request, including reading the body.
+    const BODY_ERRORS = Union{}
+    const RANGE_ATTEMPTS = 1
+end
+
 # Download bytes `rng` (0-based) of the object version `tag` into `dest` and
 # return the byte count. Throws unless the response has exactly that range,
-# the expected total size, and the same ETag.
+# the expected total size, and the same ETag. A body that fails midway is retried.
 function getRange!(dest, store, url, headers, rng, total, tag; kw...)
+    for attempt in 1:RANGE_ATTEMPTS
+        try
+            return getRangeOnce!(dest, store, url, headers, rng, total, tag; kw...)
+        catch e
+            (attempt < RANGE_ATTEMPTS && e isa BODY_ERRORS) || rethrow()
+            sleep(0.1 * attempt)
+        end
+    end
+end
+
+function getRangeOnce!(dest, store, url, headers, rng, total, tag; kw...)
     headers = transferheaders(headers)
     target = dest
     # HTTP writes into contiguous memory; other destinations use a temporary buffer.

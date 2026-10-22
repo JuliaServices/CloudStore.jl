@@ -76,7 +76,7 @@ function with_range_fixture(f, mode=:valid; data=collect(codeunits("abcdefghijkl
                 end
                 write(socket, "\r\n")
                 if method != "HEAD"
-                    if mode == :truncated_retry && attempt == 1
+                    if (mode == :truncated_retry && attempt == 1) || mode == :truncated
                         write(socket, view(body, 1:2))
                     elseif chunked
                         write(socket, string(length(body); base=16), "\r\n", body, "\r\n0\r\n\r\n")
@@ -266,8 +266,7 @@ end
 end
 
 @testset "Ranged download retry destination" begin
-    modes = isdefined(HTTP, :BytesBody) ? (:status_retry,) : (:status_retry, :truncated_retry)
-    for mode in modes
+    for mode in (:status_retry, :truncated_retry)
         with_range_fixture(mode) do host, requests
             for (store, credentials) in range_stores(host)
                 object = CloudStore.Object(store, credentials, "data", 12, "v1")
@@ -278,8 +277,19 @@ end
                 @test CloudStore.API.getRange!(view(dest, 2:5), object, 5, 4; retries=1, retry_kw...) == 4
                 @test dest == vcat(0xff, codeunits("efgh"), 0xff)
                 @test count(r -> r.method == "GET" && occursin("/data", r.target), requests) >= 2
+                # Every part's first body is cut short; each part is fetched again.
+                mode == :truncated_retry && @test CloudStore.get(store, "data"; credentials,
+                    multipartThreshold=1, partSize=4, batchSize=3, retries=1, retry_kw...) == codeunits("abcdefghijkl")
             end
         end
+    end
+    # A body that keeps failing raises after the last attempt.
+    with_range_fixture(:truncated) do host, requests
+        for (store, credentials) in range_stores(host)
+            object = CloudStore.Object(store, credentials, "data", 12, "v1")
+            @test_throws Exception CloudStore.API.getRange!(zeros(UInt8, 4), object, 5, 4; retries=0)
+        end
+        @test count(r -> r.method == "GET", requests) == 2 * CloudStore.API.RANGE_ATTEMPTS
     end
 end
 
