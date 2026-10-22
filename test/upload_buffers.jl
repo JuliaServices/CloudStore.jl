@@ -341,7 +341,7 @@ Base.close(io::FragmentedInput) = close(io.data)
                 return HTTP.Response(204)
             elseif haskey(query, "partNumber") || get(query, "comp", "") == "block"
                 n = haskey(query, "partNumber") ? parse(Int, query["partNumber"]) :
-                    parse(Int, String(CloudBase.Base64.base64decode(query["blockid"]))) + 1
+                    parse(Int, last(String(CloudBase.Base64.base64decode(query["blockid"])), 32)) + 1
                 bytes = Vector{UInt8}(request.body)
                 digest = bytes2hex(CloudBase.SHA.sha256(bytes))
                 declared = HTTP.header(request, "x-amz-content-sha256", digest)

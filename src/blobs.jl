@@ -62,11 +62,14 @@ function API.putObject(x::Container, key, body;
     return Azure.put(API.makeURL(x, key), headers, body; kw...)
 end
 
+# Azure scopes block IDs to the blob, not to an upload. A random prefix per upload keeps
+# concurrent uploads of one blob from committing each other's blocks.
 API.startMultipartUpload(x::Container, key;
-    contentType=nothing, headers=HTTP.Headers(), kw...) = nothing
+    contentType=nothing, headers=HTTP.Headers(), kw...) = bytes2hex(rand(UInt8, 16))
 
 function API.uploadPart(x::Container, url, part, partNumber, uploadId; kw...)
-    blockid = base64encode(lpad(partNumber - 1, 64, '0'))
+    # 64 bytes decoded, the length used before: all block IDs of a blob must match in length.
+    blockid = base64encode(string(uploadId, lpad(partNumber - 1, 32, '0')))
     blockrequest(url, blockid, part; kw...)
     return (blockid, length(part))
 end

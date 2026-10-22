@@ -1583,6 +1583,24 @@ end
     end
 end
 
+@testset "Concurrent multipart uploads of one blob - Azure" begin
+    Azurite.with(; debug=true) do conf
+        credentials, container = conf
+        a1, a2, b1 = fill(UInt8('a'), 1000), fill(UInt8('A'), 1000), fill(UInt8('b'), 1000)
+        first = CloudStore.MultipartUploadStream(container, "shared.bin"; credentials)
+        second = CloudStore.MultipartUploadStream(container, "shared.bin"; credentials)
+        # Interleaved staging: each upload must commit only its own blocks.
+        write(first, a1); wait(first)
+        write(second, b1); wait(second)
+        write(first, a2); wait(first)
+        close(first)
+        @test CloudStore.get(container, "shared.bin"; credentials) == [a1; a2]
+        # Committing discards the blob's other uncommitted blocks, so the second upload fails.
+        @test_throws HTTP.StatusError close(second)
+        @test CloudStore.get(container, "shared.bin"; credentials) == [a1; a2]
+    end
+end
+
 end # @testset "CloudStore.jl"
 
 include("transfer_storage.jl")
