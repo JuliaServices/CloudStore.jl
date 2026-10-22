@@ -1042,6 +1042,26 @@ end
     end
 end
 
+@testset "Failed single-request downloads close the output file" begin
+    isdir("/dev/fd") && Minio.with(; debug=true) do conf
+        credentials, bucket = conf
+        path = tempname()
+        openfiles() = length(readdir("/dev/fd"))
+        for decompress in (false, true)
+            before = openfiles()
+            GC.enable(false)  # an unclosed file would otherwise be closed by its finalizer
+            try
+                for _ in 1:20
+                    @test_throws StatusError S3.get(bucket, "missing", path; credentials, allowMultipart=false, decompress)
+                end
+            finally
+                GC.enable(true)
+            end
+            @test openfiles() < before + 5  # allow a few pooled connections
+        end
+    end
+end
+
 @testset "Decompressing a truncated gzip object into an IO raises" begin
     Minio.with(; debug=true) do conf
         credentials, bucket = conf

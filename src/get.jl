@@ -262,12 +262,15 @@ function getObjectImpl(x::AbstractStore, key::Resource, out::ResponseBodyType=no
                 rethrow(e)
             end
         elseif out isa String
-            if decompress
-                body = decompressorstream(zlibng)(open(out, "w"))
+            file = open(out, "w")
+            body = decompress ? decompressorstream(zlibng)(file) : file
+            try
                 resp = getObject(x, url, headers; response_stream=body, kw...)
-            else
-                body = open(out, "w")
-                resp = getObject(x, url, headers; response_stream=body, kw...)
+                check_redirect(key, resp)
+            catch
+                # Close the file itself: closing a decompressor over partial data throws.
+                close(file)
+                rethrow()
             end
         else
             if decompress
