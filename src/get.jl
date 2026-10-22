@@ -359,6 +359,9 @@ function getObjectImpl(x::AbstractStore, key::Resource, out::ResponseBodyType=no
     elseif out isa String
         close(body)
     else
+        # Ending the decompressor wrapped around `out` checks the gzip trailer, so a
+        # truncated object raises; `out` stays open for the caller.
+        body === out || write(body, TranscodingStreams.TOKEN_END)
         flush(body)
     end
     end_time = time()
