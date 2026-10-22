@@ -1,8 +1,8 @@
-# Run with an environment containing the CloudStore/CloudBase/HTTP stack to check:
+# Run with an environment containing the CloudStore/CloudBase/CloudBaseTest/HTTP stack to check:
 # julia --threads=4 --project=... bench/transfer_allocations.jl
 # Uses local MinIO and Azurite processes. No cloud account is accessed.
 using CloudStore, CloudBase, HTTP
-using CloudBase.CloudTest
+using CloudBaseTest
 
 const RESULT = Ref{Any}()
 function measure(f)

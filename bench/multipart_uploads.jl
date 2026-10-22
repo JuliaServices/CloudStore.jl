@@ -1,8 +1,8 @@
-# Run with an environment containing the CloudStore/CloudBase/HTTP versions to compare:
+# Run with an environment containing the CloudStore/CloudBase/CloudBaseTest/HTTP versions to compare:
 # julia --threads=4 --project=... bench/multipart_uploads.jl
 # Local MinIO/Azurite only. Counts exclude input creation and emulator allocations.
 using CloudStore, CloudBase, HTTP
-using CloudBase.CloudTest: Minio, Azurite
+using CloudBaseTest: Minio, Azurite
 
 function main()
     println("Julia=", VERSION, " threads=", Threads.nthreads())
