@@ -18,11 +18,11 @@ API.continuationToken(::Bucket) = "continuation-token"
 function API.listObjects(x::Bucket, query, result=nothing; credentials=nothing, kw...)
     query["list-type"] = "2"
     result = xml_dict(String(AWS.get(x.baseurl; credentials, query, service="s3", kw...).body))["ListBucketResult"]
-    if parse(Int, result["KeyCount"]) == 0
-        return (Object[], "")
-    end
+    # A page can be empty and still continue; only the token ends the listing.
+    token = result["IsTruncated"] == "true" ? result["NextContinuationToken"] : ""
+    parse(Int, result["KeyCount"]) == 0 && return (Object[], token)
     contents = map(y -> object(x, credentials, y), API.asArray(result["Contents"]))
-    return (contents, result["IsTruncated"] == "true" ? result["NextContinuationToken"] : "")
+    return (contents, token)
 end
 
 list(x::Bucket; kw...) = API.listObjectsImpl(x; kw...)

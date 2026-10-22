@@ -32,11 +32,13 @@ function API.listObjects(x::Container, query, result=nothing; credentials=nothin
     query["restype"] = "container"
     query["comp"] = "list"
     result = xml_dict(String(Azure.get(x.baseurl; query, credentials, kw...).body))["EnumerationResults"]
-    if isempty(result["Blobs"])
-        return (Object[], "")
-    end
+    # A page can be empty and still continue; only the marker ends the listing.
+    # An empty `<NextMarker/>` parses as an empty dictionary.
+    marker = Base.get(result, "NextMarker", "")
+    marker = marker isa AbstractString ? marker : ""
+    isempty(result["Blobs"]) && return (Object[], marker)
     contents = map(y -> make_object(x, credentials, y, get_properties), API.asArray(result["Blobs"]["Blob"]))
-    return (contents, result["NextMarker"])
+    return (contents, marker)
 end
 
 list(x::Container; kw...) = API.listObjectsImpl(x; kw...)

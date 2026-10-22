@@ -228,6 +228,32 @@ end
     end
 end
 
+@testset "listing continues past empty pages" begin
+    # Providers may return a page with no entries that still carries a continuation token.
+    server = HTTP.serve!(0; listenany=true, verbose=false) do request
+        query = HTTP.queryparams(HTTP.URI(request.target))
+        body = if haskey(query, "list-type")
+            haskey(query, "continuation-token") ?
+                "<ListBucketResult><KeyCount>1</KeyCount><IsTruncated>false</IsTruncated><Contents><Key>a</Key><Size>1</Size><ETag>\"e\"</ETag></Contents></ListBucketResult>" :
+                "<ListBucketResult><KeyCount>0</KeyCount><IsTruncated>true</IsTruncated><NextContinuationToken>page2</NextContinuationToken></ListBucketResult>"
+        else
+            haskey(query, "marker") ?
+                "<EnumerationResults><Blobs><Blob><Name>a</Name><Properties><Content-Length>1</Content-Length><Etag>0x1</Etag></Properties></Blob></Blobs><NextMarker /></EnumerationResults>" :
+                "<EnumerationResults><Blobs /><NextMarker>page2</NextMarker></EnumerationResults>"
+        end
+        return HTTP.Response(200, body)
+    end
+    port = HTTP.port(server)
+    try
+        bucket = S3.Bucket("bucket-name", "us-east-1"; host="http://127.0.0.1:$port")
+        @test [o.key for o in S3.list(bucket)] == ["a"]
+        container = Blobs.Container("container", "account"; host="http://127.0.0.1:$port")
+        @test [o.key for o in Blobs.list(container)] == ["a"]
+    finally
+        close(server)
+    end
+end
+
 CloudStore.API.startMultipartUpload(::RecordingStore, _key; kw...) = nothing
 
 function CloudStore.API.putObject(store::RecordingStore, key, body; kw...)
