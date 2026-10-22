@@ -1016,6 +1016,23 @@ end
     end
 end
 
+@testset "Decompressing a truncated gzip object into an IO raises" begin
+    Minio.with(; debug=true) do conf
+        credentials, bucket = conf
+        data = rand(UInt8('a'):UInt8('z'), 300_000)
+        full = transcode(GzipCompressor, data)
+        CloudStore.put(bucket, "full.gz", full; credentials)
+        CloudStore.put(bucket, "cut.gz", full[1:end-100]; credentials)
+        for allowMultipart in (true, false)
+            io = IOBuffer()
+            CloudStore.get(bucket, "full.gz", io; credentials, decompress=true, allowMultipart)
+            @test take!(io) == data
+            @test_throws CodecZlib.ZlibError CloudStore.get(bucket, "cut.gz", IOBuffer();
+                credentials, decompress=true, allowMultipart)
+        end
+    end
+end
+
 @testset "CloudStore.PrefetchedDownloadStream small readbytes!" begin
     Minio.with(; debug=true) do conf
         credentials, bucket = conf
