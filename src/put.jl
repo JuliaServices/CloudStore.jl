@@ -3,7 +3,9 @@ nbytes(x::String) = filesize(x)
 nbytes(x::Base.GenericIOBuffer) = x.size - x.ptr + 1
 # `bytesavailable` only counts an IOStream's read buffer, not the rest of the file.
 nbytes(x::IOStream) = filesize(x) - position(x)
-nbytes(x::IO) = eof(x) ? 0 : bytesavailable(x)
+# Other streams (pipes, decompressors, PrefetchedDownloadStream) buffer only part of
+# their remaining bytes, so their length is unknown.
+nbytes(x::IO) = nothing
 
 """
     iobufferbytes(x::Base.GenericIOBuffer) -> AbstractVector{UInt8}
@@ -90,6 +92,17 @@ function _read(body::Union{IOStream,TranscodingStream}, n, buffers, index)
 end
 
 compressorstream(zlibng) = zlibng ? CodecZlibNG.GzipCompressorStream : CodecZlib.GzipCompressorStream
+
+# Close what prepBodyMultipart opened: the compressor and a file opened from a path.
+function closeuploadbody(body, in, zlibng)
+    if body isa compressorstream(zlibng)
+        wrapped = body.stream
+        close(body)
+        body = wrapped
+    end
+    in isa String && close(body)
+    return nothing
+end
 compressor(zlibng) = zlibng ? CodecZlibNG.GzipCompressor : CodecZlib.GzipCompressor
 
 function putObjectImpl(x::AbstractStore, key::Resource, in::RequestBodyType;
@@ -109,7 +122,26 @@ function putObjectImpl(x::AbstractStore, key::Resource, in::RequestBodyType;
     N = nbytes(in)
     wbytes = Threads.Atomic{Int}(0)
     progressReported = false
-    if N <= multipartThreshold || !allowMultipart
+    # A slot is refilled only after @sync joins the preceding batch,
+    # including every retry that can still read its payload.
+    buffers = Vector{UInt8}[]
+    body = pending = nothing
+    if N === nothing && allowMultipart && multipartThreshold >= 0
+        # Unknown length: read one part ahead to choose one request or multipart.
+        body = prepBodyMultipart(in, compress, zlibng)
+        pending = try
+            _read(body, partSize, buffers, 1)
+        catch
+            closeuploadbody(body, in, zlibng)
+            rethrow()
+        end
+        if eof(body) && length(pending) <= multipartThreshold
+            closeuploadbody(body, in, zlibng)
+            # `pending` is the whole stream, already compressed when requested.
+            in, N, compress, body, pending = pending, length(pending), false, nothing, nothing
+        end
+    end
+    if N === nothing ? !allowMultipart : (N <= multipartThreshold || !allowMultipart)
         body = prepBody(in, compress, zlibng)
         wire_bytes = nbytes(body)
         resp = putObject(x, key, body;
@@ -126,19 +158,21 @@ function putObjectImpl(x::AbstractStore, key::Resource, in::RequestBodyType;
     eTags = String[]
     local eTag
     try
-        body = prepBodyMultipart(in, compress, zlibng)
+        body === nothing && (body = prepBodyMultipart(in, compress, zlibng))
         partNumber = 0
         try
-            # A slot is refilled only after @sync joins the preceding batch,
-            # including every retry that can still read its payload.
-            buffers = Vector{UInt8}[]
             # Compression can make incompressible input larger than its source, so the
             # source byte count cannot safely bound the number of output parts.
-            while !eof(body)
+            while pending !== nothing || !eof(body)
                 parts = Tuple{Int,Any}[]
                 for index = 1:batchSize
-                    eof(body) && break
-                    part = _read(body, partSize, buffers, index)
+                    if pending !== nothing
+                        # Read ahead into slot 1 while choosing multipart.
+                        part, pending = pending, nothing
+                    else
+                        eof(body) && break
+                        part = _read(body, partSize, buffers, index)
+                    end
                     isempty(part) && break
                     partNumber += 1
                     push!(parts, (partNumber, part))
@@ -156,18 +190,13 @@ function putObjectImpl(x::AbstractStore, key::Resource, in::RequestBodyType;
                     push!(eTags, parteTag)
                     Threads.atomic_add!(wbytes, wb)
                     if progress !== nothing
-                        progress(compress ? 0 : N, wbytes[])
+                        progress(something(compress ? 0 : N, 0), wbytes[])
                         progressReported = true
                     end
                 end
             end
         finally
-            if body isa compressorstream(zlibng)
-                wrapped = body.stream
-                close(body)
-                body = wrapped
-            end
-            in isa String && close(body)
+            closeuploadbody(body, in, zlibng)
         end
         eTag = completeMultipartUpload(x, url, eTags, uploadState;
             contentType, headers=transferheaders(headers), credentials, kw...)

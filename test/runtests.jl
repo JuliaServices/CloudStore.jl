@@ -31,8 +31,25 @@ end
 
 iobuffer(x) = IOBuffer(x)
 
+# A file-backed stream whose remaining length CloudStore cannot see (unlike IOStream).
+struct FileStream <: IO
+    path::String
+    io::IOStream
+end
+FileStream() = FileStream(mktemp()...)
+Base.isopen(x::FileStream) = isopen(x.io)
+Base.close(x::FileStream) = close(x.io)
+Base.eof(x::FileStream) = eof(x.io)
+Base.bytesavailable(x::FileStream) = bytesavailable(x.io)
+Base.unsafe_write(x::FileStream, p::Ptr{UInt8}, n::UInt) = unsafe_write(x.io, p, n)
+Base.unsafe_read(x::FileStream, p::Ptr{UInt8}, n::UInt) = unsafe_read(x.io, p, n)
+Base.read(x::FileStream, ::Type{UInt8}) = read(x.io, UInt8)
+Base.readbytes!(x::FileStream, b::AbstractVector{UInt8}, nb=length(b)) = readbytes!(x.io, b, nb)
+Base.seekstart(x::FileStream) = seekstart(x.io)
+Base.rm(x::FileStream) = rm(x.path)
+
 function iofile(x)
-    io = TempFile()
+    io = FileStream()
     write(io, x)
     seekstart(io)
     return io
@@ -49,7 +66,7 @@ outType(csv, ::Type{Vector{UInt8}}) = zeros(UInt8, sizeof(csv))
 outType(_, ::Type{String}) = tempname()
 outType(_, ::Type{IO}) = IOBuffer()
 
-cleanup!(x::Union{String, TempFile}) = rm(x)
+cleanup!(x::Union{String, FileStream}) = (x isa FileStream && close(x); rm(x))
 cleanup!(x::IO) = close(x)
 cleanup!(x) = nothing
 
@@ -1030,6 +1047,35 @@ end
             @test_throws CodecZlib.ZlibError CloudStore.get(bucket, "cut.gz", IOBuffer();
                 credentials, decompress=true, allowMultipart)
         end
+    end
+end
+
+@testset "Uploads from streams of unknown length" begin
+    Minio.with(; debug=true) do conf
+        credentials, bucket = conf
+        requests = String[]
+        trace = ev -> ev isa HTTP.RequestEvent && push!(requests, ev.request.method)
+        small = rand(UInt8, 1000)
+        stream() = CloudStore.API.TranscodingStreams.NoopStream(IOBuffer(small))
+        CloudStore.put(bucket, "small", stream(); credentials, trace)
+        @test requests == ["PUT"]
+        @test CloudStore.get(bucket, "small"; credentials) == small
+        empty!(requests)
+        CloudStore.put(bucket, "small.gz", stream(); credentials, compress=true, trace)
+        @test requests == ["PUT"]
+        @test transcode(GzipDecompressor, CloudStore.get(bucket, "small.gz"; credentials)) == small
+        # Copying through a PrefetchedDownloadStream streams parts instead of one request.
+        big = rand(UInt8, 20 * 2^20)
+        CloudStore.put(bucket, "big", big; credentials)
+        empty!(requests)
+        source = CloudStore.PrefetchedDownloadStream(bucket, "big"; credentials)
+        try
+            CloudStore.put(bucket, "copy", source; credentials, trace)
+        finally
+            close(source)
+        end
+        @test count(==("PUT"), requests) == 3
+        @test CloudStore.get(bucket, "copy"; credentials) == big
     end
 end
 
