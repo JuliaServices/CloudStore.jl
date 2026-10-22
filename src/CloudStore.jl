@@ -130,6 +130,11 @@ Upload `input`. Set `contentType` to a MIME type such as `"text/csv"` to store i
 as the object's `Content-Type`. The setting applies to single-request and multipart
 uploads.
 
+An `IO` other than `IOBuffer` or `IOStream` has no known length, so one part
+(`partSize` bytes) is read first: a stream that ends within that part and within
+`multipartThreshold` bytes is sent in one request, and a longer one is uploaded in
+parts as it is read.
+
 When `progress` is a function, call it as
 `progress(total_bytes, transferred_bytes)` after completed transfer batches. For a
 compressed multipart upload, `total_bytes` is `0` because the final wire size is not
