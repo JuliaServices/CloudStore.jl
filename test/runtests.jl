@@ -1399,8 +1399,12 @@ end
     end
 
     @testset "validate_region" begin
-        @test_throws ArgumentError CloudStore.validate_region("no-region-1")
-        @test_throws ArgumentError parse_s3_url(region="no-region-1")
+        @test_throws ArgumentError CloudStore.validate_region("no_region")
+        @test_throws ArgumentError parse_s3_url(region="no_region")
+        for region in ("us-east-1", "ap-southeast-5", "mx-central-1", "us-gov-west-1")
+            @test CloudStore.validate_region(region) == region
+            @test parse_s3_url(; region)[5] == region
+        end
 
         @test CloudStore.validate_key("us-east-1") == "us-east-1"
     end
