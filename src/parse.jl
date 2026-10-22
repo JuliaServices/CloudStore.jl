@@ -1,40 +1,5 @@
 
 
-# https://docs.aws.amazon.com/general/latest/gr/rande.html
-const AWS_REGIONS = Set{String}([
-    "us-east-2",
-    "us-east-1",
-    "us-west-1",
-    "us-west-2",
-    "af-south-1",
-    "ap-east-1",
-    "ap-south-2",
-    "ap-southeast-3",
-    "ap-southeast-4",
-    "ap-south-1",
-    "ap-northeast-3",
-    "ap-northeast-2",
-    "ap-southeast-1",
-    "ap-southeast-2",
-    "ap-northeast-1",
-    "ca-central-1",
-    "ca-west-1",
-    "eu-central-1",
-    "eu-west-1",
-    "eu-west-2",
-    "eu-south-1",
-    "eu-west-3",
-    "eu-south-2",
-    "eu-north-1",
-    "eu-central-2",
-    "il-central-1",
-    "me-south-1",
-    "me-central-1",
-    "sa-east-1",
-    "us-gov-east-1",
-    "us-gov-west-1",
-])
-
 # https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html
 function validate_bucket_name(bucket_name, accelerate)
     !(3 <= ncodeunits(bucket_name) <= 63)    && throw(ArgumentError("Validation failed for `bucket` name $(repr(bucket_name)): Bucket names must be between 3 (min) and 63 (max) characters long."))
@@ -62,8 +27,10 @@ function validate_key(key)
     return key
 end
 
+# Region names are <area>-<subarea>...-<number> (us-east-1, ap-southeast-5, us-gov-west-1).
+# Checking the shape, not a fixed list, keeps regions AWS adds later working.
 function validate_region(region)
-    region in AWS_REGIONS || throw(ArgumentError("Validation failed for `region` $(repr(region))"))
+    occursin(r"^[a-z]{2}(-[a-z]+)+-[0-9]+$", region) || throw(ArgumentError("Validation failed for `region` $(repr(region))"))
     return region
 end
 
