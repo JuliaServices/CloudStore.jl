@@ -39,9 +39,15 @@ function with_range_fixture(f, mode=:valid; data=collect(codeunits("abcdefghijkl
                 if method == "GET"
                     m = match(r"^bytes=(\d+)-(\d+)$", range)
                     lo, hi = parse.(Int, m.captures)
+                    # Like S3, end a range that runs past the object at its last byte.
+                    hi = min(hi, length(data) - 1)
                     before_range === nothing || before_range(lo, hi)
                     body = data[lo + 1:hi + 1]
                     status = haskey(headers, "range") ? 206 : 200
+                    if status == 206 && lo >= length(data)
+                        # S3 rejects any range of an empty object.
+                        status, body = 416, collect(codeunits("<Error><Code>InvalidRange</Code></Error>"))
+                    end
                     range_lo = mode == :wrong_range ? lo + 1 : lo
                     range_hi = mode == :wrong_range ? hi + 1 : hi
                     total = length(data) + (mode == :wrong_total)
@@ -137,7 +143,9 @@ end
                 end
                 @test read_prefetched(object; retries=0) == expected
             end
-            @test all(r -> r.method != "GET" || r.headers["if-match"] == "\"v1\"", requests)
+            # Only a download's first range, which learns the ETag, goes without If-Match.
+            @test all(r -> r.method != "GET" || get(r.headers, "if-match", "") == "\"v1\"" ||
+                r.headers["range"] == "bytes=0-3", requests)
         end
     end
 
@@ -173,7 +181,43 @@ end
                 @test_throws ArgumentError copyto!(zeros(UInt8, 4), 1, object, 1, 4)
                 @test CloudStore.get(store, "data"; credentials, allowMultipart=false, retries=0) == expected
             end
-            @test all(r -> r.method != "GET" || !haskey(r.headers, "range"), requests)
+            # Only the first part is requested before the ETag is rejected.
+            @test all(r -> r.method != "GET" || get(r.headers, "range", "bytes=0-3") == "bytes=0-3", requests)
+        end
+    end
+end
+
+@testset "An object that fits in one part takes one request" begin
+    for data in (UInt8[], collect(codeunits("abcdefghijkl")))
+        with_range_fixture(; data) do host, requests
+            for (store, credentials) in range_stores(host),
+                    output in (nothing, zeros(UInt8, 12), zeros(UInt8, 20), IOBuffer(), tempname())
+                start = length(requests)
+                try
+                    result = CloudStore.get(store, "data", output; credentials,
+                        multipartThreshold=1, partSize=16, retries=0)
+                    actual = result isa IO ? take!(result) : result isa String ? read(result) : result
+                    @test actual == data
+                finally
+                    output isa String && isfile(output) && rm(output)
+                end
+                @test [(r.method, get(r.headers, "range", "")) for r in requests[start + 1:end]] == [("GET", "bytes=0-15")]
+            end
+        end
+    end
+end
+
+@testset "Parts after a 256 KiB first part" begin
+    data = rand(UInt8, 3 << 20)
+    with_range_fixture(; data) do host, requests
+        store, credentials = first(range_stores(host))
+        for output in (nothing, zeros(UInt8, length(data)), IOBuffer())
+            start = length(requests)
+            result = CloudStore.get(store, "data", output; credentials,
+                multipartThreshold=1, partSize=3 << 19, batchSize=2, retries=0)
+            @test (result isa IO ? take!(result) : result) == data
+            @test Set(r.headers["range"] for r in requests[start + 1:end]) ==
+                Set(["bytes=0-262143", "bytes=262144-1835007", "bytes=1835008-3145727"])
         end
     end
 end
@@ -358,7 +402,8 @@ Base.flush(sink::RangeTestSink) = flush(sink.buffer)
     end
     with_range_fixture() do host, requests
         store, credentials = first(range_stores(host))
-        sink = RangeTestSink(IOBuffer(), _ -> error("destination write failed"))
+        # The second part's write fails while the third part downloads.
+        sink = RangeTestSink(IOBuffer(), _ -> position(sink.buffer) > 0 && error("destination write failed"))
         @test_throws Exception CloudStore.get(store, "data", sink; credentials,
             multipartThreshold=1, partSize=4, batchSize=3, retries=0)
         @test count(r -> r.method == "GET", requests) == 3

@@ -60,12 +60,14 @@ open("/tmp/large.bin", "w") do io
 end
 ```
 
-Multipart downloads first read object metadata. Use `objectMaxSize` when you know an upper
-bound and want to avoid that request for a small object. Set `decompress=true` to gunzip the
-downloaded bytes.
+A download first requests the object's first 256 KiB (or `partSize` bytes, if smaller) as a
+range. The response gives the object's size and ETag, so a smaller object needs no other
+request; the rest of a larger object downloads in parallel parts of `partSize` bytes. A
+destination buffer shorter than `multipartThreshold`, or `objectMaxSize` below it, makes a
+single GET without a range instead. Set `decompress=true` to gunzip the downloaded bytes.
 
-Each range response must match that metadata: the requested bytes, the object size, and
-the strong ETag. If the object changes during the download or a response is incomplete,
+Each later range response must match the first one: the requested bytes, the object size,
+and the strong ETag. If the object changes during the download or a response is incomplete,
 `get` throws instead of returning mixed or partial data. The destination may already hold
 some of the bytes. S3 and Azure Blob Storage send strong ETags; for other endpoints, pass
 `allowMultipart=false` to make a single GET. Conditional headers you pass, such as

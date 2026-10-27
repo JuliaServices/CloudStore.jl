@@ -138,7 +138,8 @@ function CloudStore.API.getObject(
     range = HTTP.header(headers, "Range", "bytes=0-$(length(store.data) - 1)")
     match_result = match(r"bytes=(\d+)-(\d+)", range)
     first_byte = parse(Int, match_result[1]) + 1
-    last_byte = parse(Int, match_result[2]) + 1
+    # Like S3, end a range that runs past the object at its last byte.
+    last_byte = min(parse(Int, match_result[2]) + 1, length(store.data))
     part = view(store.data, first_byte:last_byte)
     if response_stream !== nothing
         response_stream isa IO ? write(response_stream, part) : copyto!(response_stream, part)
