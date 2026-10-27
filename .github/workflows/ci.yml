@@ -39,7 +39,6 @@ jobs:
       - uses: codecov/codecov-action@v7
         with:
           files: lcov.info
-          fail_ci_if_error: true
           use_oidc: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
   docs:
     name: Documentation
@@ -49,6 +48,9 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v2
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1'
       - uses: julia-actions/julia-buildpkg@latest
       - name: Build documentation
         run: julia --project=docs -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate(); include("docs/make.jl")'
@@ -62,6 +64,9 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v2
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1'
       - uses: julia-actions/julia-buildpkg@latest
       - uses: julia-actions/julia-docdeploy@latest
         env:
