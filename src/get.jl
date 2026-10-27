@@ -72,19 +72,23 @@ else
     const RANGE_ATTEMPTS = 1
 end
 
-# Download bytes `rng` (0-based) of the object version `tag` into `dest` and
-# return the byte count. Throws unless the response has exactly that range,
-# the expected total size, and the same ETag. A body that fails midway is retried.
-function getRange!(dest, store, url, headers, rng, total, tag; kw...)
+# Call `f`, again when its response body fails midway (see BODY_ERRORS).
+function retryrange(f)
     for attempt in 1:RANGE_ATTEMPTS
         try
-            return getRangeOnce!(dest, store, url, headers, rng, total, tag; kw...)
+            return f()
         catch e
             (attempt < RANGE_ATTEMPTS && e isa BODY_ERRORS) || rethrow()
             sleep(0.1 * attempt)
         end
     end
 end
+
+# Download bytes `rng` (0-based) of the object version `tag` into `dest` and
+# return the byte count. Throws unless the response has exactly that range,
+# the expected total size, and the same ETag. A body that fails midway is retried.
+getRange!(dest, store, url, headers, rng, total, tag; kw...) =
+    retryrange(() -> getRangeOnce!(dest, store, url, headers, rng, total, tag; kw...))
 
 function getRangeOnce!(dest, store, url, headers, rng, total, tag; kw...)
     headers = transferheaders(headers)
@@ -97,35 +101,7 @@ function getRangeOnce!(dest, store, url, headers, rng, total, tag; kw...)
     # evaluate If-Unmodified-Since. The response ETag is checked in either case.
     conditions = ("If-Match", "If-None-Match", "If-Modified-Since", "If-Unmodified-Since", "If-Range")
     any(name -> HTTP.hasheader(headers, name), conditions) || HTTP.setheader(headers, "If-Match" => tag)
-    # Ranges address stored bytes. Decompression belongs after reassembly.
-    request_kw = merge(OWNED_HEADERS_KW, (; kw...), (; decompress=false))
-    # A view keeps HTTP from resizing the caller's buffer and bounds writes
-    # when the server ignores Range or sends too many bytes.
-    dest = view(dest, 1:length(rng))
-    @static if isdefined(HTTP, :BytesBody)
-        resp = getObject(store, url, headers; response_stream=dest, request_kw...)
-        # HTTP 2 sets `content_length` to the body bytes it received, not the header value.
-        nbytes = resp.content_length
-    else
-        buffer = IOBuffer(dest; write=true, maxsize=length(dest))
-        receive = function(http)
-            # Retries call this again; start each attempt at the beginning of `dest`.
-            seekstart(buffer)
-            response = HTTP.startread(http)
-            if response.status == 206
-                while !eof(http)
-                    readbytes!(http, buffer)
-                end
-            elseif response.status == 200
-                throw(ArgumentError("server ignored Range during ranged download"))
-            else
-                # Keep error and redirect bodies out of `dest` for the normal HTTP layers.
-                response.body = read(http)
-            end
-        end
-        resp = getObject(store, url, headers; response_stream=buffer, iofunction=receive, request_kw...)
-        nbytes = position(buffer)
-    end
+    resp, nbytes = rangeresponse!(dest, store, url, headers, length(rng); kw...)
     resp.status == 206 || throw(ArgumentError("expected HTTP 206 for a ranged download, got $(resp.status)"))
     range = HTTP.header(resp, "Content-Range", "")
     parseContentRange(range) == (first(rng), last(rng), total) || throw(ArgumentError(
@@ -136,6 +112,88 @@ function getRangeOnce!(dest, store, url, headers, rng, total, tag; kw...)
         "object ETag changed during ranged download"))
     direct || copyto!(target, 1, dest, 1, nbytes)
     return nbytes
+end
+
+# Send a ranged GET and receive its body into the first `n` bytes of the contiguous
+# `dest`, or into `resp.body` when `dest === nothing`. Error bodies never reach `dest`.
+# Returns the response and the number of body bytes received.
+function rangeresponse!(dest, store, url, headers, n; kw...)
+    # Ranges address stored bytes. Decompression belongs after reassembly.
+    request_kw = merge(OWNED_HEADERS_KW, (; kw...), (; decompress=false))
+    # A view keeps HTTP from resizing the caller's buffer and bounds writes
+    # when the server ignores Range or sends too many bytes.
+    dest === nothing || (dest = view(dest, 1:n))
+    @static if isdefined(HTTP, :BytesBody)
+        resp = getObject(store, url, headers; response_stream=dest, request_kw...)
+        # HTTP 2 sets `content_length` to the body bytes it received, not the header value.
+        nbytes = resp.content_length
+    else
+        if dest === nothing
+            resp = getObject(store, url, headers; request_kw...)
+            nbytes = length(resp.body)
+        else
+            buffer = IOBuffer(dest; write=true, maxsize=length(dest))
+            receive = function(http)
+                # Retries call this again; start each attempt at the beginning of `dest`.
+                seekstart(buffer)
+                response = HTTP.startread(http)
+                if response.status == 206
+                    while !eof(http)
+                        readbytes!(http, buffer)
+                    end
+                elseif response.status == 200
+                    throw(ArgumentError("server ignored Range during ranged download"))
+                else
+                    # Keep error and redirect bodies out of `dest` for the normal HTTP layers.
+                    response.body = read(http)
+                end
+            end
+            resp = getObject(store, url, headers; response_stream=buffer, iofunction=receive, request_kw...)
+            nbytes = position(buffer)
+        end
+    end
+    return resp, nbytes
+end
+
+# The first part of a download is at most 256 KiB: most small objects fit, and later
+# parts of a large object wait only for these bytes, not for a whole part.
+const FIRST_PART_SIZE = 2^18
+
+# Byte range (0-based) of download part `n` of an object of `total` bytes: part 1 holds
+# the first `first` bytes, and later parts hold up to `partSize` bytes each.
+partrange(n, first, partSize, total) = n == 1 ? (0:(first - 1)) :
+    ((first + (n - 2) * partSize):(min(total, first + (n - 1) * partSize) - 1))
+
+# The object size reported by the first range response, which must hold the object's
+# first `min(n, size)` bytes.
+function firstrangesize(resp, nbytes, n)
+    range = HTTP.header(resp, "Content-Range", "")
+    # S3 rejects every range of an empty object with 416; Azurite answers `bytes 0--1/0`.
+    (resp.status == 416 || (resp.status == 206 && endswith(range, "/0"))) && return 0
+    200 <= resp.status < 300 || throw(status_error(resp))
+    resp.status == 206 || throw(ArgumentError("expected HTTP 206 for a ranged download, got $(resp.status)"))
+    lo, hi, total = parseContentRange(range)
+    expected = min(n, total)
+    (lo, hi) == (0, expected - 1) || throw(ArgumentError(
+        "unexpected Content-Range: $range; expected bytes 0-$(expected - 1)/$total"))
+    nbytes == expected || throw(ArgumentError(
+        "incomplete ranged download: expected $expected bytes, received $nbytes"))
+    return total
+end
+
+# Request the object's first `n` bytes into `dest` (as in `rangeresponse!`). The
+# response also carries the object's size and ETag, so an object of at most `n` bytes
+# needs no other request. S3 answers any range of an empty object with 416; that
+# response is returned rather than thrown.
+function firstrange!(dest, store, url, headers, n; kw...)
+    headers = transferheaders(headers)
+    HTTP.setheader(headers, contentRange(0:(n - 1)))
+    try
+        return rangeresponse!(dest, store, url, headers, n; kw...)
+    catch e
+        (e isa HTTP.StatusError && e.status == 416) || rethrow()
+        return e.response, 0
+    end
 end
 
 # Body bytes received. A chunked response has no Content-Length, and HTTP 1 before
@@ -180,9 +238,9 @@ end
 
 # For smaller object, we don't do a multipart download, but instead just do a single GET request.
 # This changes the exception we get when the provided buffer is too small, as for the multipart
-# case, we do a HEAD request first to know the size of the object, which gives us the opportunity
-# to throw an ArgumentError. But for the single GET case, we don't know the size of the object
-# until we get the response. HTTP 1 wraps a response-stream error in HTTP.RequestError,
+# case, the first range response reports the size of the object, which gives us the opportunity
+# to throw an ArgumentError. But for the single GET case, HTTP fails while writing the body
+# into the buffer. HTTP 1 wraps a response-stream error in HTTP.RequestError,
 # while HTTP 2 can surface the underlying error directly. Unwrap the HTTP 1 shape when
 # it is available so both versions return the same ArgumentError to the caller.
 function _check_buffer_too_small_exception(@nospecialize(e::Exception))
@@ -213,7 +271,7 @@ function getObjectImpl(x::AbstractStore, key::Resource, out::ResponseBodyType=no
     lograte::Bool=false, kw...)
 
     # if user provided a buffer or signalled the max object size is < multipartThreshold
-    # then we'll avoid doing an exploratory HEAD request to get total size
+    # then we'll make a single GET without a Range header
     # and take the user's word that the total object size is <= objectMaxSize | length(out)
     if objectMaxSize !== nothing && objectMaxSize < multipartThreshold
         allowMultipart = false
@@ -288,35 +346,42 @@ function getObjectImpl(x::AbstractStore, key::Resource, out::ResponseBodyType=no
 
     # multipart downloads
 
-    # make a head request to see if the object happens to be empty
-    # if so, it isn't valid to make a Range bytes request, so we'll short-circuit
-    # the head request also lets us know how big the object it
-    # `headers` seeds every range request below, so HEAD gets its own copy.
-    resp = API.headObject(x, url, copy(headers); kw...)
+    # The first part's response also reports the object's size and ETag, so a small
+    # object takes one request. A caller buffer that holds the first part receives it
+    # directly; otherwise HTTP allocates the response body.
+    firstSize = min(partSize, FIRST_PART_SIZE)
+    direct = out isa StridedVector{UInt8} && stride(out, 1) == 1 && length(out) >= firstSize
+    resp, firstbytes = retryrange(() -> firstrange!(direct ? out : nothing, x, url, headers, firstSize; kw...))
     check_redirect(key, resp)
-    resp.status == 200 || throw(status_error(resp))
-    contentLength = parse(Int, HTTP.header(resp, "Content-Length", ""))
-    contentLength >= 0 || throw(ArgumentError("negative object Content-Length"))
-    tag = contentLength == 0 ? "" : rangeETag(HTTP.header(resp, "ETag", ""))
+    contentLength = firstrangesize(resp, firstbytes, firstSize)
+    # Later parts must come from the same object version.
+    tag = contentLength > firstbytes ? rangeETag(HTTP.header(resp, "ETag", "")) : ""
     if contentLength == 0
         # if the object is zero-length, return an "empty" version of the output type
-        if out === nothing || out isa AbstractVector{UInt8}
-            res = resp.body
+        if out === nothing
+            res = UInt8[]
         elseif out isa String
             body = open(out, "w")
-        else
+        elseif !(out isa AbstractVector{UInt8})
             body = out
         end
         @goto done
-    elseif out === nothing
-        # allocate the full, final buffer upfront since we know the length
-        res = body = Vector{UInt8}(undef, contentLength)
+    end
+    nbytes[] = firstbytes
+    if out === nothing
+        if firstbytes == contentLength
+            res = resp.body
+        else
+            # allocate the full, final buffer once the size is known
+            res = Vector{UInt8}(undef, contentLength)
+            copyto!(res, 1, resp.body, 1, firstbytes)
+        end
     elseif out isa AbstractVector{UInt8}
         # user-provided buffer is allowed to be larger than actual object size, but not smaller
         # NOTE: wording of the error message matches what HTTP.jl throws when the buffer is too small
         length(out) < contentLength && throw(ArgumentError("Unable to grow response stream IOBuffer $(length(out)) large enough for response body size: $(contentLength)"))
+        direct || copyto!(out, 1, resp.body, 1, firstbytes)
         res = out
-        body = view(out, 1:contentLength)
     elseif out isa String
         file = open(out, "w")
         body = decompress ? decompressorstream(zlibng)(file) : file
@@ -326,18 +391,21 @@ function getObjectImpl(x::AbstractStore, key::Resource, out::ResponseBodyType=no
         buffers = BufferBatch(batchSize, partSize)
     end
 
-    nTasks = cld(contentLength, partSize)
+    nTasks = 1 + cld(contentLength - firstbytes, partSize)
     nLoops = cld(nTasks, batchSize)
     downloads = Vector{Task}(undef, min(batchSize, nTasks))
     try
+        # The first part reaches a stream destination before later parts are requested.
+        out === nothing || out isa AbstractVector{UInt8} || write(body, resp.body)
         for j = 1:nLoops
             count = min(batchSize, nTasks - (j - 1) * batchSize)
             @sync begin
                 for i = 1:count
                     n = (j - 1) * batchSize + i
+                    # The first request fetched part 1.
+                    n == 1 && continue
                     downloads[i] = Threads.@spawn begin
-                        _n = $n
-                        rng = ((_n - 1) * partSize):min(contentLength - 1, _n * partSize - 1)
+                        rng = partrange($n, firstbytes, partSize, contentLength)
                         if out === nothing || out isa AbstractVector{UInt8}
                             # The Content-Range header is 0-indexed; the view is 1-indexed.
                             buf = view(res, (first(rng) + 1):(last(rng) + 1))
@@ -351,10 +419,10 @@ function getObjectImpl(x::AbstractStore, key::Resource, out::ResponseBodyType=no
                 # Write parts in order as they are validated while later parts
                 # download. On failure, @sync still waits for every task.
                 if !(out === nothing || out isa AbstractVector{UInt8})
-                    Threads.@spawn for i = 1:count
+                    Threads.@spawn for i = (j == 1 ? 2 : 1):count
                         wait(downloads[i])
-                        offset = ((j - 1) * batchSize + i - 1) * partSize
-                        write(body, view(buffers[i], 1:min(partSize, contentLength - offset)))
+                        rng = partrange((j - 1) * batchSize + i, firstbytes, partSize, contentLength)
+                        write(body, view(buffers[i], 1:length(rng)))
                     end
                 end
             end
