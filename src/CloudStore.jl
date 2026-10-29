@@ -67,6 +67,14 @@ resourceKey(resource::ParsedURLResource) = resource.path
 asArray(x::Array) = x
 asArray(x) = [x]
 
+# The child elements named `tag` of an `xml_dict` node. XMLDict groups repeated tags under
+# the tag, but lists every child in order under "" when different tags interleave.
+function xmlelements(node, tag)
+    node isa AbstractDict || return Any[]
+    haskey(node, "") && return Any[c[tag] for c in node[""] if c isa AbstractDict && haskey(c, tag)]
+    return haskey(node, tag) ? asArray(node[tag]) : Any[]
+end
+
 etag(x) = strip(x, '"')
 is_redirect_response(resp) = resp.status in (301, 302, 303, 307, 308)
 

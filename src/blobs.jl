@@ -9,16 +9,32 @@ const Credentials = Azure.Credentials
 
 API.cloudName(::Container) = "Blob Storage"
 
+# XMLDict drops whitespace-only text, which would lose a blob name such as " ". Each
+# blob's <Name> gets a `cloudstore` attribute and a "!" before its text; `blobname`
+# removes the "!".
+const BLOB_NAME = r"<Blob>(\s*)<Name(\s[^>]*)?>"
+markblobnames(xml) = replace(xml, BLOB_NAME => s"<Blob>\1<Name cloudstore=\"\"\2>!")
+
+function blobname(name)
+    name isa AbstractDict || return name
+    text = name[""]
+    haskey(name, :cloudstore) && (text = chop(text; head=1, tail=0))
+    # Azure percent-encodes a name that XML cannot hold.
+    return Base.get(name, :Encoded, "") == "true" ? HTTP.unescapeuri(text) : String(text)
+end
+
 function make_object(store, creds, body, add_properties=false)
+    name = blobname(body["Name"])
     properties = Dict{String, Any}()
     if add_properties
         # body is a Dict{Any, Any}, convert keys to strings
         for (key,value) in body
             properties[key] = value
         end
+        properties["Name"] = name
     end
 
-    return Object(store, creds, body["Name"],
+    return Object(store, creds, name,
                   parse(Int, body["Properties"]["Content-Length"]),
                   API.etag(body["Properties"]["Etag"]), properties)
 end
@@ -31,13 +47,15 @@ function API.listObjects(x::Container, query, result=nothing; credentials=nothin
                                               get_properties=false, kw...)
     query["restype"] = "container"
     query["comp"] = "list"
-    result = xml_dict(String(Azure.get(x.baseurl; query, credentials, kw...).body))["EnumerationResults"]
+    xml = String(Azure.get(x.baseurl; query, credentials, kw...).body)
+    result = xml_dict(markblobnames(xml))["EnumerationResults"]
     # A page can be empty and still continue; only the marker ends the listing.
     # An empty `<NextMarker/>` parses as an empty dictionary.
     marker = Base.get(result, "NextMarker", "")
     marker = marker isa AbstractString ? marker : ""
-    isempty(result["Blobs"]) && return (Object[], marker)
-    contents = map(y -> make_object(x, credentials, y, get_properties), API.asArray(result["Blobs"]["Blob"]))
+    # The BlobPrefix entries of a delimiter listing are not objects.
+    contents = Object[make_object(x, credentials, y, get_properties)
+        for y in API.xmlelements(result["Blobs"], "Blob")]
     return (contents, marker)
 end
 
