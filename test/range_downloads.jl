@@ -1,6 +1,6 @@
 # A raw loopback fixture can send truncated and chunked bodies without a server
 # library repairing the intentionally inconsistent response headers.
-function with_range_fixture(f, mode=:valid; data=collect(codeunits("abcdefghijkl")), before_range=nothing, content_encoding=nothing)
+function with_range_fixture(f, mode=:valid; data=collect(codeunits("abcdefghijkl")), before_range=nothing, before_body=nothing, content_encoding=nothing)
     listener = Sockets.listen(Sockets.IPv4("127.0.0.1"), 0)
     port = Sockets.getsockname(listener)[2]
     requests = Any[]
@@ -81,6 +81,10 @@ function with_range_fixture(f, mode=:valid; data=collect(codeunits("abcdefghijkl
                     write(socket, name, ": ", value, "\r\n")
                 end
                 write(socket, "\r\n")
+                if before_body !== nothing && method == "GET"
+                    flush(socket)
+                    before_body(range)
+                end
                 if method != "HEAD"
                     if (mode == :truncated_retry && attempt == 1) || mode == :truncated
                         write(socket, view(body, 1:2))
@@ -193,6 +197,9 @@ end
             for (store, credentials) in range_stores(host),
                     output in (nothing, zeros(UInt8, 12), zeros(UInt8, 20), IOBuffer(), tempname())
                 start = length(requests)
+                # A caller buffer shorter than a part bounds the first range (`get` then
+                # resizes the buffer to the object).
+                range = output isa AbstractVector && length(output) < 16 ? "bytes=0-$(length(output) - 1)" : "bytes=0-15"
                 try
                     result = CloudStore.get(store, "data", output; credentials,
                         multipartThreshold=1, partSize=16, retries=0)
@@ -201,13 +208,13 @@ end
                 finally
                     output isa String && isfile(output) && rm(output)
                 end
-                @test [(r.method, get(r.headers, "range", "")) for r in requests[start + 1:end]] == [("GET", "bytes=0-15")]
+                @test [(r.method, get(r.headers, "range", "")) for r in requests[start + 1:end]] == [("GET", range)]
             end
         end
     end
 end
 
-@testset "Parts after a 256 KiB first part" begin
+@testset "Parts after the first part" begin
     data = rand(UInt8, 3 << 20)
     with_range_fixture(; data) do host, requests
         store, credentials = first(range_stores(host))
@@ -216,8 +223,54 @@ end
             result = CloudStore.get(store, "data", output; credentials,
                 multipartThreshold=1, partSize=3 << 19, batchSize=2, retries=0)
             @test (result isa IO ? take!(result) : result) == data
-            @test Set(r.headers["range"] for r in requests[start + 1:end]) ==
-                Set(["bytes=0-262143", "bytes=262144-1835007", "bytes=1835008-3145727"])
+            # A byte-vector result's first part is a whole part; a stream's is 256 KiB.
+            @test Set(r.headers["range"] for r in requests[start + 1:end]) == (output isa IO ?
+                Set(["bytes=0-262143", "bytes=262144-1835007", "bytes=1835008-3145727"]) :
+                Set(["bytes=0-1572863", "bytes=1572864-3145727"]))
+        end
+        # With the default part size, a 3 MiB object takes one request.
+        for output in (nothing, zeros(UInt8, 8 << 20))
+            start = length(requests)
+            @test CloudStore.get(store, "data", output; credentials, retries=0) == data
+            @test [r.headers["range"] for r in requests[start + 1:end]] == ["bytes=0-8388607"]
+        end
+    end
+end
+
+# Measured in a function: `@allocated` in a testset body compiles the whole testset.
+allocated(f) = @allocated f()
+
+@testset "A caller buffer shorter than a part receives the first part" begin
+    data = rand(UInt8, 4 << 20)
+    with_range_fixture(; data) do host, requests
+        store, credentials = first(range_stores(host))
+        out = zeros(UInt8, length(data))
+        fetchdata() = CloudStore.get(store, "data", out; credentials, multipartThreshold=1, retries=0)
+        fetchdata(); fetchdata()
+        # The fixture copies the range it serves (4 MiB). Receiving the first part into
+        # HTTP's own growing body and copying it into `out` would add about 7 MiB.
+        @test allocated(fetchdata) < 2 * length(data)
+        @test out == data
+    end
+end
+
+@testset "Later parts start while the first part's body arrives" begin
+    data = rand(UInt8, 64)
+    later_parts = Channel{Int}(Inf)
+    waited = Ref(false)
+    before_range = (lo, hi) -> lo > 0 && put!(later_parts, lo)
+    # The first part's body waits, up to 10 s, until a later part has been requested.
+    before_body = range -> startswith(range, "bytes=0-") &&
+        (waited[] = timedwait(() -> isready(later_parts), 10.0) != :ok)
+    with_range_fixture(; data, before_range, before_body) do host, requests
+        for (store, credentials) in range_stores(host), output in (nothing, zeros(UInt8, 64))
+            while isready(later_parts)
+                take!(later_parts)
+            end
+            result = CloudStore.get(store, "data", output; credentials,
+                multipartThreshold=1, partSize=16, batchSize=4, retries=0)
+            @test result == data
+            @test !waited[]
         end
     end
 end
