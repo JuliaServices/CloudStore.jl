@@ -197,6 +197,9 @@ end
             for (store, credentials) in range_stores(host),
                     output in (nothing, zeros(UInt8, 12), zeros(UInt8, 20), IOBuffer(), tempname())
                 start = length(requests)
+                # A caller buffer shorter than a part bounds the first range (`get` then
+                # resizes the buffer to the object).
+                range = output isa AbstractVector && length(output) < 16 ? "bytes=0-$(length(output) - 1)" : "bytes=0-15"
                 try
                     result = CloudStore.get(store, "data", output; credentials,
                         multipartThreshold=1, partSize=16, retries=0)
@@ -205,8 +208,6 @@ end
                 finally
                     output isa String && isfile(output) && rm(output)
                 end
-                # A caller buffer shorter than a part bounds the first range.
-                range = output isa AbstractVector && length(output) < 16 ? "bytes=0-$(length(output) - 1)" : "bytes=0-15"
                 @test [(r.method, get(r.headers, "range", "")) for r in requests[start + 1:end]] == [("GET", range)]
             end
         end
