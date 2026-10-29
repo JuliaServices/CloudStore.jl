@@ -161,9 +161,120 @@ function rangeresponse!(dest, store, url, headers, n; kw...)
     return resp, nbytes
 end
 
-# The first part of a download is at most 256 KiB: most small objects fit, and later
-# parts of a large object wait only for these bytes, not for a whole part.
+# Without early parts (below), the first part of a download is at most 256 KiB: most
+# small objects fit, and later parts of a large object wait only for these bytes.
 const FIRST_PART_SIZE = 2^18
+
+# HTTP 2 reports each response head to a request's `trace` callback before reading the
+# body, so a download's other parts can start while its first part is still arriving.
+const EARLY_PARTS = isdefined(HTTP, :ResponseHeadEvent)
+
+# Parts 2.. of a download, started by `startparts!` from the first range's response head.
+# Setting `stop` keeps later batches from starting once the first part has failed.
+mutable struct EarlyParts
+    task::Union{Nothing,Task}
+    total::Int
+    tag::String
+    res::Union{Nothing,AbstractVector{UInt8}}
+    @atomic stop::Bool
+end
+
+# Called with each trace event of the first range request. On the first `206` head with
+# a valid Content-Range for an object larger than the range, a strong ETag, and room in
+# `out` (`nothing` allocates the result), starts downloading the remaining parts into
+# the result. Never throws: the first range's own checks report a bad response.
+function startparts!(early::EarlyParts, ev, out, firstSize, x, url, headers, partSize, batchSize, nbytes, progress; kw...)
+    (early.task === nothing && ev isa HTTP.ResponseHeadEvent && ev.response.status == 206) || return nothing
+    m = match(r"^bytes 0-(\d+)/(\d+)\z", HTTP.header(ev.response, "Content-Range", ""))
+    m === nothing && return nothing
+    hi, total = tryparse(Int, m[1]), tryparse(Int, m[2])
+    (hi == firstSize - 1 && total !== nothing && total > firstSize) || return nothing
+    (out === nothing || length(out) >= total) || return nothing
+    tag = try
+        rangeETag(HTTP.header(ev.response, "ETag", ""))
+    catch
+        return nothing
+    end
+    res = try
+        out === nothing ? Vector{UInt8}(undef, total) : out
+    catch
+        return nothing
+    end
+    early.total, early.tag, early.res = total, tag, res
+    early.task = Threads.@spawn getparts!(res, nothing, nothing, x, url, headers, firstSize, partSize,
+        total, tag, batchSize, nbytes, progress, early; kw...)
+    return nothing
+end
+
+# Download parts 2.. of an object of `total` bytes whose first `firstbytes` bytes are
+# part 1, at most `batchSize` parts at a time: into the byte vector `res`, or (when `res`
+# is `nothing`) through `buffers`, in order, into the stream `body`. Calls `progress`
+# after each batch and returns whether it did. Stops before a batch once `early.stop`.
+function getparts!(res, body, buffers, x, url, headers, firstbytes, partSize, total, tag, batchSize, nbytes, progress,
+        early::Union{Nothing,EarlyParts}=nothing; kw...)
+    nTasks = 1 + cld(total - firstbytes, partSize)
+    nLoops = cld(nTasks, batchSize)
+    downloads = Vector{Task}(undef, min(batchSize, nTasks))
+    reported = false
+    for j = 1:nLoops
+        early !== nothing && (@atomic early.stop) && break
+        count = min(batchSize, nTasks - (j - 1) * batchSize)
+        @sync begin
+            for i = 1:count
+                n = (j - 1) * batchSize + i
+                # The first request fetched part 1.
+                n == 1 && continue
+                downloads[i] = Threads.@spawn begin
+                    rng = partrange($n, firstbytes, partSize, total)
+                    if res !== nothing
+                        # The Content-Range header is 0-indexed; the view is 1-indexed.
+                        buf = view(res, (first(rng) + 1):(last(rng) + 1))
+                    else
+                        buf = view(buffers[$i], 1:length(rng))
+                    end
+                    received = getRange!(buf, x, url, headers, rng, total, tag; kw...)
+                    Threads.atomic_add!(nbytes, received)
+                end
+            end
+            # Write parts in order as they are validated while later parts
+            # download. On failure, @sync still waits for every task.
+            if res === nothing
+                Threads.@spawn for i = (j == 1 ? 2 : 1):count
+                    wait(downloads[i])
+                    rng = partrange((j - 1) * batchSize + i, firstbytes, partSize, total)
+                    write(body, view(buffers[i], 1:length(rng)))
+                end
+            end
+        end
+        if progress !== nothing
+            progress(total, nbytes[])
+            reported = true
+        end
+    end
+    return reported
+end
+
+# After the first part fails: keep further batches from starting, and wait for the
+# parts in flight, which write into the result.
+function stopparts!(early::EarlyParts)
+    early.task === nothing && return nothing
+    @atomic early.stop = true
+    try
+        wait(early.task)
+    catch
+    end
+    return nothing
+end
+
+# Wait for `t` and return its value, rethrowing a failure as the task's own exception.
+function fetchparts(t::Task)
+    try
+        return fetch(t)
+    catch e
+        e isa TaskFailedException && throw(e.task.exception)
+        rethrow()
+    end
+end
 
 # Byte range (0-based) of download part `n` of an object of `total` bytes: part 1 holds
 # the first `first` bytes, and later parts hold up to `partSize` bytes each.
@@ -421,14 +532,43 @@ function getObjectImpl(x::AbstractStore, key::Resource, out::ResponseBodyType=no
 
     # The first part's response also reports the object's size and ETag, so a small
     # object takes one request. A caller buffer that holds the first part receives it
-    # directly; otherwise HTTP allocates the response body.
-    firstSize = min(partSize, FIRST_PART_SIZE)
+    # directly; otherwise HTTP allocates the response body (growing one over 1 MiB by
+    # doubling). With early parts, a byte-vector result's first part is a whole part, and
+    # its response head starts the other parts.
+    early = EarlyParts(nothing, 0, "", nothing, false)
+    vectorout = out === nothing || out isa AbstractVector{UInt8}
+    firstSize = EARLY_PARTS && vectorout ? partSize : min(partSize, FIRST_PART_SIZE)
     direct = out isa StridedVector{UInt8} && stride(out, 1) == 1 && length(out) >= firstSize
-    resp, firstbytes = retryrange(() -> firstrange!(direct ? out : nothing, x, url, headers, firstSize; kw...))
-    check_redirect(key, resp)
-    contentLength = firstrangesize(resp, firstbytes, firstSize)
-    # Later parts must come from the same object version.
-    tag = contentLength > firstbytes ? rangeETag(HTTP.header(resp, "ETag", "")) : ""
+    firstkw = if EARLY_PARTS && vectorout
+        usertrace = Base.get(kw, :trace, nothing)
+        merge(kw, (; trace=function (ev)
+            startparts!(early, ev, out, firstSize, x, url, headers, partSize, batchSize, nbytes, progress; kw...)
+            usertrace === nothing || usertrace(ev)
+            return nothing
+        end))
+    else
+        kw
+    end
+    resp, firstbytes = try
+        retryrange(() -> firstrange!(direct ? out : nothing, x, url, headers, firstSize; firstkw...))
+    catch
+        # Started parts may still be writing into the result.
+        stopparts!(early)
+        rethrow()
+    end
+    contentLength, tag = try
+        check_redirect(key, resp)
+        total = firstrangesize(resp, firstbytes, firstSize)
+        # Later parts must come from the same object version.
+        etag = total > firstbytes ? rangeETag(HTTP.header(resp, "ETag", "")) : ""
+        if early.task !== nothing && (total, etag) != (early.total, early.tag)
+            throw(ArgumentError("object size or ETag changed during ranged download"))
+        end
+        total, etag
+    catch
+        stopparts!(early)
+        rethrow()
+    end
     if contentLength == 0
         # if the object is zero-length, return an "empty" version of the output type
         if out === nothing
@@ -440,8 +580,14 @@ function getObjectImpl(x::AbstractStore, key::Resource, out::ResponseBodyType=no
         end
         @goto done
     end
-    nbytes[] = firstbytes
-    if out === nothing
+    Threads.atomic_add!(nbytes, firstbytes)
+    if early.task !== nothing
+        # Parts 2.. are downloading into `early.res`.
+        res = early.res
+        direct || copyto!(res, 1, resp.body, 1, firstbytes)
+        progressReported = fetchparts(early.task)
+        @goto done
+    elseif out === nothing
         if firstbytes == contentLength
             res = resp.body
         else
@@ -464,45 +610,15 @@ function getObjectImpl(x::AbstractStore, key::Resource, out::ResponseBodyType=no
         buffers = BufferBatch(batchSize, partSize)
     end
 
-    nTasks = 1 + cld(contentLength - firstbytes, partSize)
-    nLoops = cld(nTasks, batchSize)
-    downloads = Vector{Task}(undef, min(batchSize, nTasks))
     try
-        # The first part reaches a stream destination before later parts are requested.
-        out === nothing || out isa AbstractVector{UInt8} || write(body, resp.body)
-        for j = 1:nLoops
-            count = min(batchSize, nTasks - (j - 1) * batchSize)
-            @sync begin
-                for i = 1:count
-                    n = (j - 1) * batchSize + i
-                    # The first request fetched part 1.
-                    n == 1 && continue
-                    downloads[i] = Threads.@spawn begin
-                        rng = partrange($n, firstbytes, partSize, contentLength)
-                        if out === nothing || out isa AbstractVector{UInt8}
-                            # The Content-Range header is 0-indexed; the view is 1-indexed.
-                            buf = view(res, (first(rng) + 1):(last(rng) + 1))
-                        else
-                            buf = view(buffers[$i], 1:length(rng))
-                        end
-                        received = getRange!(buf, x, url, headers, rng, contentLength, tag; kw...)
-                        Threads.atomic_add!(nbytes, received)
-                    end
-                end
-                # Write parts in order as they are validated while later parts
-                # download. On failure, @sync still waits for every task.
-                if !(out === nothing || out isa AbstractVector{UInt8})
-                    Threads.@spawn for i = (j == 1 ? 2 : 1):count
-                        wait(downloads[i])
-                        rng = partrange((j - 1) * batchSize + i, firstbytes, partSize, contentLength)
-                        write(body, view(buffers[i], 1:length(rng)))
-                    end
-                end
-            end
-            if progress !== nothing
-                progress(contentLength, nbytes[])
-                progressReported = true
-            end
+        if vectorout
+            progressReported = getparts!(res, nothing, nothing, x, url, headers, firstbytes, partSize,
+                contentLength, tag, batchSize, nbytes, progress; kw...)
+        else
+            # The first part reaches a stream destination before later parts are requested.
+            write(body, resp.body)
+            progressReported = getparts!(nothing, body, buffers, x, url, headers, firstbytes, partSize,
+                contentLength, tag, batchSize, nbytes, progress; kw...)
         end
     catch
         # Close the file itself: closing a decompressor over partial data throws
