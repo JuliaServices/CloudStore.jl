@@ -205,7 +205,9 @@ end
                 finally
                     output isa String && isfile(output) && rm(output)
                 end
-                @test [(r.method, get(r.headers, "range", "")) for r in requests[start + 1:end]] == [("GET", "bytes=0-15")]
+                # A caller buffer shorter than a part bounds the first range.
+                range = output isa AbstractVector && length(output) < 16 ? "bytes=0-$(length(output) - 1)" : "bytes=0-15"
+                @test [(r.method, get(r.headers, "range", "")) for r in requests[start + 1:end]] == [("GET", range)]
             end
         end
     end
@@ -231,6 +233,23 @@ end
             @test CloudStore.get(store, "data", output; credentials, retries=0) == data
             @test [r.headers["range"] for r in requests[start + 1:end]] == ["bytes=0-8388607"]
         end
+    end
+end
+
+# Measured in a function: `@allocated` in a testset body compiles the whole testset.
+allocated(f) = @allocated f()
+
+@testset "A caller buffer shorter than a part receives the first part" begin
+    data = rand(UInt8, 4 << 20)
+    with_range_fixture(; data) do host, requests
+        store, credentials = first(range_stores(host))
+        out = zeros(UInt8, length(data))
+        fetchdata() = CloudStore.get(store, "data", out; credentials, multipartThreshold=1, retries=0)
+        fetchdata(); fetchdata()
+        # The fixture copies the range it serves (4 MiB). Receiving the first part into
+        # HTTP's own growing body and copying it into `out` would add about 7 MiB.
+        @test allocated(fetchdata) < 2 * length(data)
+        @test out == data
     end
 end
 

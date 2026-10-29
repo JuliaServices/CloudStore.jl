@@ -534,10 +534,12 @@ function getObjectImpl(x::AbstractStore, key::Resource, out::ResponseBodyType=no
     # object takes one request. A caller buffer that holds the first part receives it
     # directly; otherwise HTTP allocates the response body (growing one over 1 MiB by
     # doubling). With early parts, a byte-vector result's first part is a whole part, and
-    # its response head starts the other parts.
+    # its response head starts the other parts. A caller buffer must hold the whole
+    # object, so the first part is at most the buffer's length and always fits in it.
     early = EarlyParts(nothing, 0, "", nothing, false)
     vectorout = out === nothing || out isa AbstractVector{UInt8}
     firstSize = EARLY_PARTS && vectorout ? partSize : min(partSize, FIRST_PART_SIZE)
+    out isa AbstractVector{UInt8} && (firstSize = clamp(length(out), 1, firstSize))
     direct = out isa StridedVector{UInt8} && stride(out, 1) == 1 && length(out) >= firstSize
     firstkw = if EARLY_PARTS && vectorout
         usertrace = Base.get(kw, :trace, nothing)

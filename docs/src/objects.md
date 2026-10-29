@@ -60,8 +60,9 @@ open("/tmp/large.bin", "w") do io
 end
 ```
 
-A download first requests the object's first `partSize` bytes as a range (256 KiB, or
-`partSize` if smaller, for a file or stream destination). The response gives the object's
+A download first requests the object's first `partSize` bytes as a range (at most the
+destination buffer's length; 256 KiB, or `partSize` if smaller, for a file or stream
+destination). The response gives the object's
 size and ETag, so a smaller object needs no other request; the rest of a larger object
 downloads in parallel parts of `partSize` bytes, which start as soon as the first response's
 headers arrive when the result is a byte vector. Without a destination buffer, HTTP grows
