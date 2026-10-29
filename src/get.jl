@@ -3,6 +3,9 @@ function listObjectsImpl(x::AbstractStore;
     prefix::String="",
     maxKeys=maxListKeys(x),
     query=Dict{String, String}(), kw...)
+    # Each page adds prefix, page size, and continuation keys; the caller's query is not
+    # changed, so reusing it cannot start another listing from this one's last token.
+    query = copy(query)
     if maxKeys > maxListKeys(x)
         @warn "$(cloudName(x)) only supports $(maxListKeys(x)) keys per request: `$maxKeys` requested"
         maxKeys = maxListKeys(x)
@@ -15,6 +18,9 @@ function listObjectsImpl(x::AbstractStore;
     end
     contents, token = listObjects(x, query; kw...)
     while !isempty(token)
+        # A service that answered a token with that same token would be asked forever.
+        token == Base.get(query, continuationToken(x), nothing) &&
+            error("$(cloudName(x)) listing returned the same continuation token twice")
         query[continuationToken(x)] = token
         contents2, token = listObjects(x, query; kw...)
         append!(contents, contents2)

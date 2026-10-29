@@ -272,6 +272,43 @@ end
     end
 end
 
+@testset "listing leaves the caller's query unchanged and stops on a repeated token" begin
+    server = HTTP.serve!(0; listenany=true, verbose=false) do request
+        query = HTTP.queryparams(HTTP.URI(request.target))
+        s3 = haskey(query, "list-type")
+        token = get(query, s3 ? "continuation-token" : "marker", "")
+        # "loop" answers every page with the same token; "pages" has two pages.
+        next = query["prefix"] == "loop" ? "again" : isempty(token) ? "page2" : ""
+        name = isempty(token) ? "first" : "second"
+        body = s3 ? "<ListBucketResult><IsTruncated>$(!isempty(next))</IsTruncated>" *
+                (isempty(next) ? "" : "<NextContinuationToken>$next</NextContinuationToken>") *
+                "<Contents><Key>$name</Key><Size>1</Size><ETag>\"e\"</ETag></Contents></ListBucketResult>" :
+            "<EnumerationResults><Blobs><Blob><Name>$name</Name><Properties><Content-Length>1</Content-Length>" *
+                "<Etag>0x1</Etag></Properties></Blob></Blobs><NextMarker>$next</NextMarker></EnumerationResults>"
+        return HTTP.Response(200, body)
+    end
+    port = HTTP.port(server)
+    try
+        for store in (S3.Bucket("bucket-name", "us-east-1"; host="http://127.0.0.1:$port"),
+                Blobs.Container("container", "account"; host="http://127.0.0.1:$port"))
+            query = Dict("delimiter" => "/")
+            for _ in 1:2
+                @test [o.key for o in CloudStore.list(store; prefix="pages", maxKeys=1, query)] == ["first", "second"]
+                @test query == Dict("delimiter" => "/")
+            end
+            listing = @async try
+                CloudStore.list(store; prefix="loop")
+            catch err
+                err
+            end
+            done = timedwait(() -> istaskdone(listing), 30) == :ok
+            @test done && fetch(listing) isa ErrorException
+        end
+    finally
+        close(server)
+    end
+end
+
 @testset "listing delimiter pages and keys XML cannot hold" begin
     s3pages = Dict(
         # A delimiter listing's common prefixes count in KeyCount.
