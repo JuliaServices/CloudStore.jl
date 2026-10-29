@@ -1,6 +1,6 @@
 module S3
 
-using CloudBase.AWS, XMLDict, HTTP, CodecZlib
+using CloudBase.AWS, XMLDict, HTTP, CodecZlib, MD5
 using ..API
 import ..parseAWSBucketRegionKey
 
@@ -84,7 +84,41 @@ function API.completeMultipartUpload(x::Bucket, url, eTags, uploadId;
     # The completion request carries only its XML body. S3 asks clients to retry a
     # failed completion; an upload ID completes at most once, so a retry cannot
     # publish different data.
-    return completeupload(url, uploadId, body; attempts=3, retry_non_idempotent=true, kw...)
+    try
+        return completeupload(url, uploadId, body; attempts=3, retry_non_idempotent=true, kw...)
+    catch e
+        # A retry whose earlier attempt completed the upload (its response was lost)
+        # finds no upload: HTTP 404, NoSuchUpload.
+        (e isa HTTP.StatusError && e.status == 404) || rethrow()
+        tag = completedetag(url, eTags; kw...)
+        tag === nothing && rethrow()
+        return tag
+    end
+end
+
+# The ETag S3 gives an object completed from parts with these ETags: the MD5 of the
+# parts' binary MD5s, "-", and the part count. `nothing` if a part ETag is not an MD5.
+function multipartetag(eTags)
+    digests = UInt8[]
+    for tag in eTags
+        hex = strip(tag, '"')
+        (length(hex) == 32 && all(isxdigit, hex)) || return nothing
+        append!(digests, hex2bytes(hex))
+    end
+    return string(bytes2hex(md5(digests)), '-', length(eTags))
+end
+
+# The object's ETag if it is the one these parts complete to, else `nothing`.
+function completedetag(url, eTags; credentials=nothing, kw...)
+    expected = multipartetag(eTags)
+    expected === nothing && return nothing
+    resp = try
+        AWS.head(url; credentials, service="s3", kw...)
+    catch
+        return nothing
+    end
+    tag = API.etag(HTTP.header(resp, "ETag", ""))
+    return resp.status == 200 && tag == expected ? tag : nothing
 end
 
 # `attempts` bounds retries of an InternalError sent in an HTTP 200 body.

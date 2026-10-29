@@ -89,3 +89,57 @@
         end
     end
 end
+
+@testset "S3 completion after a lost response" begin
+    # The first completion completes the upload but its response fails (HTTP 500, which
+    # HTTP retries), so the retry finds no upload. The object's ETag shows whether it is
+    # this upload: S3 derives it from the part ETags.
+    parttags = ("\"00112233445566778899aabbccddeeff\"", "\"ffeeddccbbaa99887766554433221100\"")
+    expected = "2c9fc96c5e9c12cc2e04537710e74a63-2"
+    for ours in (true, false), upload in (:put, :stream)
+        methods = Channel{String}(16)
+        completions = Ref(0)
+        server = HTTP.serve!(0; listenany=true, verbose=false) do request
+            put!(methods, request.method)
+            request.method == "DELETE" && return HTTP.Response(204)
+            request.method == "HEAD" && return HTTP.Response(200, ["ETag" => ours ? "\"$expected\"" : "\"other\""])
+            if request.method == "PUT"
+                number = parse(Int, HTTP.queryparams(HTTP.URI(request.target))["partNumber"])
+                return HTTP.Response(200, ["ETag" => parttags[number]])
+            end
+            occursin("uploads", request.target) && return HTTP.Response(200,
+                "<InitiateMultipartUploadResult><UploadId>upload-id</UploadId></InitiateMultipartUploadResult>")
+            completions[] += 1
+            completions[] == 1 && return HTTP.Response(500, "<Error><Code>InternalError</Code></Error>")
+            return HTTP.Response(404, "<Error><Code>NoSuchUpload</Code></Error>")
+        end
+        try
+            bucket = S3.Bucket("bucket-name", "us-east-1"; host="http://127.0.0.1:$(HTTP.port(server))")
+            credentials = S3.Credentials("test-access-key", "test-secret-key")
+            result = try
+                if upload == :put
+                    S3.put(bucket, "key", UInt8[1, 2, 3, 4, 5, 6]; credentials,
+                        multipartThreshold=1, partSize=3, batchSize=1).eTag
+                else
+                    CloudStore.MultipartUploadStream(bucket, "key"; credentials) do io
+                        write(io, UInt8[1, 2, 3])
+                        write(io, UInt8[4, 5, 6])
+                    end
+                end
+            catch exception
+                exception
+            end
+            close(methods)
+            sent = collect(methods)
+            if ours
+                @test result == expected
+                @test sent == ["POST", "PUT", "PUT", "POST", "POST", "HEAD"]
+            else
+                @test result isa StatusError && result.status == 404
+                @test sent == ["POST", "PUT", "PUT", "POST", "POST", "HEAD", "DELETE"]
+            end
+        finally
+            close(server)
+        end
+    end
+end
