@@ -395,13 +395,20 @@ flight, `write` waits. Do not modify `bytes` after passing it to `write`.
 `close` aborts the upload and rethrows. The `do`-block form calls `close` after `f(io)`
 returns, or aborts if `f` throws.
 
-On S3 every part except the last must be at least 5 MiB; use `CloudStore.put` for smaller
-objects. Other keyword arguments are passed to the HTTP requests. This API is experimental.
+`headers` and `contentType` describe the object, as for `CloudStore.put`, and apply to
+`close` too: write conditions such as `If-None-Match: *` and `If-Match` are checked when
+the upload completes. On S3 every part except the last must be at least 5 MiB; use
+`CloudStore.put` for smaller objects. Other keyword arguments are passed to the HTTP
+requests. This API is experimental.
 """
 mutable struct MultipartUploadStream{T <: AbstractStore} <: IO
     store::T
     url::String
     credentials::Union{Nothing, AWS.Credentials, Azure.Credentials}
+    # Object headers and content type, sent again on completion: S3 checks write
+    # conditions only then, and Azure takes everything from the block-list commit.
+    headers::HTTP.Headers
+    contentType::Union{Nothing, String}
     uploadState::Union{String, Nothing}
     eTags::Vector{String}
     upload_queue::Channel{Tuple{Int, Vector{UInt8}}}
@@ -418,16 +425,21 @@ mutable struct MultipartUploadStream{T <: AbstractStore} <: IO
         key::String;
         credentials::Union{Nothing, AWS.Credentials}=nothing,
         concurrent_writes_to_channel::Int=(4 * Threads.nthreads()),
+        headers=nothing,
+        contentType::Union{Nothing,AbstractString}=nothing,
         kw...
     )
         concurrent_writes_to_channel > 0 || throw(ArgumentError(
             "`concurrent_writes_to_channel` must be positive"))
         url = makeURL(store, key)
-        uploadState = API.startMultipartUpload(store, key; credentials, kw...)
+        uploadState = API.startMultipartUpload(store, key; credentials,
+            headers=transferheaders(headers), contentType, kw...)
         io = new{AWS.Bucket}(
             store,
             url,
             credentials,
+            transferheaders(headers),
+            contentType === nothing ? nothing : String(contentType),
             uploadState,
             Vector{String}(),
             Channel{Tuple{Int, Vector{UInt8}}}(Inf),
@@ -447,16 +459,21 @@ mutable struct MultipartUploadStream{T <: AbstractStore} <: IO
         key::String;
         credentials::Union{Nothing, Azure.Credentials}=nothing,
         concurrent_writes_to_channel::Int=(4 * Threads.nthreads()),
+        headers=nothing,
+        contentType::Union{Nothing,AbstractString}=nothing,
         kw...
     )
         concurrent_writes_to_channel > 0 || throw(ArgumentError(
             "`concurrent_writes_to_channel` must be positive"))
         url = makeURL(store, key)
-        uploadState = API.startMultipartUpload(store, key; credentials, kw...)
+        uploadState = API.startMultipartUpload(store, key; credentials,
+            headers=transferheaders(headers), contentType, kw...)
         io = new{Azure.Container}(
             store,
             url,
             credentials,
+            transferheaders(headers),
+            contentType === nothing ? nothing : String(contentType),
             uploadState,
             Vector{String}(),
             Channel{Tuple{Int, Vector{UInt8}}}(Inf),
@@ -474,8 +491,10 @@ mutable struct MultipartUploadStream{T <: AbstractStore} <: IO
     # Alternative syntax that applies the function `f` to the result of
     # `MultipartUploadStream(args...; kwargs...)`, waits for all parts to be uploaded and
     # and closes the stream.
-    function MultipartUploadStream(f::Function, args...; kw...)
-        io = MultipartUploadStream(args...; kw...)
+    # `close` and `abort` receive the other keywords; this one only configures the stream.
+    function MultipartUploadStream(f::Function, args...;
+        concurrent_writes_to_channel::Int=(4 * Threads.nthreads()), kw...)
+        io = MultipartUploadStream(args...; concurrent_writes_to_channel, kw...)
         try
             f(io)
             close(io; kw...)
@@ -552,7 +571,8 @@ Wait for active part requests, then abort the multipart upload. S3 removes the
 uploaded parts immediately. Azure has no matching abort request and removes
 uncommitted blocks after its service retention period.
 """
-function abort(io::MultipartUploadStream; credentials=io.credentials, kw...)
+# `contentType` describes the object; the do-block form passes it here too.
+function abort(io::MultipartUploadStream; credentials=io.credentials, contentType=nothing, kw...)
     Base.@lock io.cond_wait begin
         io.closed && return nothing
         io.aborted && return nothing
@@ -570,14 +590,15 @@ Base.isopen(io::MultipartUploadStream) =
 
 # When there are no more data chunks to upload, this function closes the channel and sends
 # a POST request with a single id for the entire upload.
-function Base.close(io::MultipartUploadStream; credentials=io.credentials, kw...)
+function Base.close(io::MultipartUploadStream; credentials=io.credentials,
+    headers=io.headers, contentType=io.contentType, kw...)
     io.closed && return nothing
     io.aborted && throw(InvalidStateException("multipart upload was aborted", :closed))
     try
         isopen(io.upload_queue) && close(io.upload_queue)
         wait(io)
-        result = API.completeMultipartUpload(
-            io.store, io.url, io.eTags, io.uploadState; credentials, kw...)
+        result = API.completeMultipartUpload(io.store, io.url, io.eTags, io.uploadState;
+            credentials, headers=transferheaders(headers), contentType, kw...)
         io.closed = true
         return result
     catch e

@@ -92,51 +92,69 @@ end
 
 @testset "S3 completion after a lost response" begin
     # The first completion completes the upload but its response fails (HTTP 500, which
-    # HTTP retries), so the retry finds no upload. The object's ETag shows whether it is
-    # this upload: S3 derives it from the part ETags.
+    # HTTP retries). The retry finds no upload (404), or, with a write condition, fails it
+    # against the stored object (412). The upload ID is then gone, and the object's ETag
+    # shows whether it is this upload: S3 derives it from the part ETags. A failed
+    # condition leaves the upload open, so a 412 with the upload still listed is final.
     parttags = ("\"00112233445566778899aabbccddeeff\"", "\"ffeeddccbbaa99887766554433221100\"")
     expected = "2c9fc96c5e9c12cc2e04537710e74a63-2"
-    for ours in (true, false), upload in (:put, :stream)
+    cases = ((404, true, true), (404, false, true), (412, true, true), (412, false, true), (412, true, false))
+    for (status, ours, gone) in cases, upload in (:put, :stream)
         methods = Channel{String}(16)
+        conditions = Channel{String}(16)
         completions = Ref(0)
         server = HTTP.serve!(0; listenany=true, verbose=false) do request
             put!(methods, request.method)
             request.method == "DELETE" && return HTTP.Response(204)
             request.method == "HEAD" && return HTTP.Response(200, ["ETag" => ours ? "\"$expected\"" : "\"other\""])
+            request.method == "GET" && return gone ?
+                HTTP.Response(404, "<Error><Code>NoSuchUpload</Code></Error>") :
+                HTTP.Response(200, "<ListPartsResult><UploadId>upload-id</UploadId><IsTruncated>false</IsTruncated></ListPartsResult>")
             if request.method == "PUT"
                 number = parse(Int, HTTP.queryparams(HTTP.URI(request.target))["partNumber"])
                 return HTTP.Response(200, ["ETag" => parttags[number]])
             end
             occursin("uploads", request.target) && return HTTP.Response(200,
                 "<InitiateMultipartUploadResult><UploadId>upload-id</UploadId></InitiateMultipartUploadResult>")
+            put!(conditions, HTTP.header(request, "If-None-Match", ""))
             completions[] += 1
             completions[] == 1 && return HTTP.Response(500, "<Error><Code>InternalError</Code></Error>")
-            return HTTP.Response(404, "<Error><Code>NoSuchUpload</Code></Error>")
+            return HTTP.Response(status, status == 404 ?
+                "<Error><Code>NoSuchUpload</Code></Error>" : "<Error><Code>PreconditionFailed</Code></Error>")
         end
         try
             bucket = S3.Bucket("bucket-name", "us-east-1"; host="http://127.0.0.1:$(HTTP.port(server))")
             credentials = S3.Credentials("test-access-key", "test-secret-key")
-            result = try
-                if upload == :put
-                    S3.put(bucket, "key", UInt8[1, 2, 3, 4, 5, 6]; credentials,
-                        multipartThreshold=1, partSize=3, batchSize=1).eTag
-                else
-                    CloudStore.MultipartUploadStream(bucket, "key"; credentials) do io
-                        write(io, UInt8[1, 2, 3])
-                        write(io, UInt8[4, 5, 6])
+            headers = status == 412 ? ["If-None-Match" => "*"] : []
+            logger = Test.TestLogger()
+            result = Base.with_logger(logger) do
+                try
+                    if upload == :put
+                        S3.put(bucket, "key", UInt8[1, 2, 3, 4, 5, 6]; credentials, headers,
+                            multipartThreshold=1, partSize=3, batchSize=1).eTag
+                    else
+                        CloudStore.MultipartUploadStream(bucket, "key"; credentials, headers) do io
+                            write(io, UInt8[1, 2, 3])
+                            write(io, UInt8[4, 5, 6])
+                        end
                     end
+                catch exception
+                    exception
                 end
-            catch exception
-                exception
             end
+            # Gone but not shown by the ETag: the error is kept and says the write may be stored.
+            @test any(log -> occursin("may have stored", log.message), logger.logs) == (status == 412 && gone && !ours)
             close(methods)
+            close(conditions)
             sent = collect(methods)
-            if ours
+            @test collect(conditions) == (status == 412 ? ["*", "*"] : ["", ""])
+            # NoSuchUpload already says the upload is gone; a 412 needs ListParts (GET).
+            checks = status == 412 ? (gone ? ["GET", "HEAD"] : ["GET"]) : ["HEAD"]
+            @test sent == ["POST", "PUT", "PUT", "POST", "POST", checks..., (ours && gone ? () : ("DELETE",))...]
+            if ours && gone
                 @test result == expected
-                @test sent == ["POST", "PUT", "PUT", "POST", "POST", "HEAD"]
             else
-                @test result isa StatusError && result.status == 404
-                @test sent == ["POST", "PUT", "PUT", "POST", "POST", "HEAD", "DELETE"]
+                @test result isa StatusError && result.status == status
             end
         finally
             close(server)

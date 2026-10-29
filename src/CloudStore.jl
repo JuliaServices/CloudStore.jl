@@ -138,6 +138,16 @@ Upload `input`. Set `contentType` to a MIME type such as `"text/csv"` to store i
 as the object's `Content-Type`. The setting applies to single-request and multipart
 uploads.
 
+Write conditions in `headers`, `If-None-Match: *` (create only) or `If-Match: <etag>`,
+apply to multipart uploads as well: S3 checks them when the upload completes and Azure
+when it commits the block list. A retried completion whose first response was lost fails
+its condition against the object it stored, so after such a failure `put` reports success
+only if the provider shows that this upload stored the object: on S3 the upload ID is gone
+and the object's ETag is the one its parts produce; on Azure the committed block IDs,
+which are unique to the upload, are exactly its blocks. A single-request upload has no
+such identity: if its response is lost, HTTP's automatic replay can fail the condition
+(412, or 409 on Azure) after the first attempt stored the object.
+
 An `IO` other than `IOBuffer` or `IOStream` has no known length, so one part
 (`partSize` bytes) is read first: a stream that ends within that part and within
 `multipartThreshold` bytes is sent in one request, and a longer one is uploaded in

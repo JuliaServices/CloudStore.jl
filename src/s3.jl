@@ -80,18 +80,27 @@ end
 function API.completeMultipartUpload(x::Bucket, url, eTags, uploadId;
     contentType=nothing, headers=HTTP.Headers(), kw...)
     body = XMLDict.node_xml("CompleteMultipartUpload", Dict("Part" => [Dict("PartNumber" => string(i), "ETag" => eTag) for (i, eTag) in enumerate(eTags)]))
-    # Caller headers describe the object and were sent when the upload started.
-    # The completion request carries only its XML body. S3 asks clients to retry a
+    # Caller headers describe the object and were sent when the upload started, but
+    # S3 evaluates write conditions only on completion. S3 asks clients to retry a
     # failed completion; an upload ID completes at most once, so a retry cannot
     # publish different data.
+    conditions = HTTP.Headers([h for h in headers if lowercase(first(h)) in ("if-match", "if-none-match")])
     try
-        return completeupload(url, uploadId, body; attempts=3, retry_non_idempotent=true, kw...)
+        return completeupload(url, uploadId, body; headers=conditions, attempts=3, retry_non_idempotent=true, kw...)
     catch e
         # A retry whose earlier attempt completed the upload (its response was lost)
-        # finds no upload: HTTP 404, NoSuchUpload.
-        (e isa HTTP.StatusError && e.status == 404) || rethrow()
+        # finds no upload (404 NoSuchUpload) or fails a write condition against the
+        # object that attempt stored (412).
+        (e isa HTTP.StatusError && e.status in (404, 412)) || rethrow()
+        # A failed condition leaves the upload in progress; a completed upload is gone.
+        e.status == 412 && !uploadgone(url, uploadId; kw...) && rethrow()
         tag = completedetag(url, eTags; kw...)
-        tag === nothing && rethrow()
+        if tag === nothing
+            # Gone, but the ETag does not show these parts: SSE-KMS and SSE-C ETags are not
+            # part MD5s, or another write replaced the object.
+            e.status == 412 && @warn "S3 no longer has multipart upload $uploadId after its completion failed a write condition (HTTP 412): an earlier completion attempt may have stored the object."
+            rethrow()
+        end
         return tag
     end
 end
@@ -119,6 +128,16 @@ function completedetag(url, eTags; credentials=nothing, kw...)
     end
     tag = API.etag(HTTP.header(resp, "ETag", ""))
     return resp.status == 200 && tag == expected ? tag : nothing
+end
+
+# `true` only when ListParts answers 404 (NoSuchUpload) for the upload ID.
+function uploadgone(url, uploadId; kw...)
+    status = try
+        AWS.get(url; query=Dict("uploadId" => uploadId, "max-parts" => "1"), service="s3", kw...).status
+    catch e
+        e isa HTTP.StatusError ? e.status : 0
+    end
+    return status == 404
 end
 
 # `attempts` bounds retries of an InternalError sent in an HTTP 200 body.
