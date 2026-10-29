@@ -216,6 +216,12 @@ function check_redirect(key, resp)
     end
 end
 
+function checkstatus(key, resp)
+    check_redirect(key, resp)
+    200 <= resp.status < 300 || throw(status_error(resp))
+    return nothing
+end
+
 decompressorstream(zlibng) = zlibng ? CodecZlibNG.GzipDecompressorStream : CodecZlib.GzipDecompressorStream
 decompressor(zlibng) = zlibng ? CodecZlibNG.GzipDecompressor : CodecZlib.GzipDecompressor
 
@@ -256,6 +262,69 @@ function _check_buffer_too_small_exception(@nospecialize(e::Exception))
         end
     end
     return e
+end
+
+# The `response_stream` of a single GET into a stream destination. HTTP writes a failed
+# response's body into a stream destination too. Once a response head reports a status
+# other than 2xx, the body is kept here (up to 1 MiB) instead of reaching `io`. Bytes
+# written before any head arrives (by a store that writes directly) pass through.
+mutable struct ResponseSink{T<:IO} <: IO
+    io::T
+    status::Int
+    error::Vector{UInt8}
+end
+
+ResponseSink(io::IO) = ResponseSink(io, 0, UInt8[])
+
+passes(sink::ResponseSink) = sink.status == 0 || 200 <= sink.status < 300
+
+function Base.unsafe_write(sink::ResponseSink, p::Ptr{UInt8}, n::UInt)
+    passes(sink) && return unsafe_write(sink.io, p, n)
+    keep = min(Int(n), max(0, 2^20 - length(sink.error)))
+    append!(sink.error, unsafe_wrap(Array, p, keep))
+    return Int(n)
+end
+
+# Send a single GET for the whole object, receiving a 2xx body into the stream `io`.
+# Any other body stays out of `io` and is the returned response's body.
+@static if isdefined(HTTP, :ResponseHeadEvent)
+    # HTTP 2 retries a failed status without raising it; `getObjectImpl` checks it.
+    const SINGLE_GET_KW = (; status_exception=false)
+
+    function streamresponse!(io, store, url, headers; trace=nothing, kw...)
+        sink = ResponseSink(io)
+        tracer = function (ev)
+            # HTTP closes retried and redirected responses unread, so the body it then
+            # writes belongs to the last head.
+            ev isa HTTP.ResponseHeadEvent && (sink.status = ev.response.status)
+            trace === nothing || trace(ev)
+            return nothing
+        end
+        resp = getObject(store, url, headers; response_stream=sink, trace=tracer, kw...)
+        passes(sink) && return resp
+        return HTTP.Response(resp.status, sink.error;
+            headers=resp.headers, request=resp.request, request_url=resp.request_url)
+    end
+else
+    # HTTP 1 retries a failed status only when it raises a StatusError.
+    const SINGLE_GET_KW = (;)
+
+    function streamresponse!(io, store, url, headers; kw...)
+        received = false
+        receive = function (http)
+            response = HTTP.startread(http)
+            if 200 <= response.status < 300
+                # HTTP 1 retries a body that fails midway. `io` cannot take back the
+                # bytes it already received, so that retry fails instead.
+                received && throw(ArgumentError("a download into a stream cannot be retried after its body started"))
+                received = true
+                response.request.context[:nbytes] = write(io, http)
+            else
+                response.body = read(http)
+            end
+        end
+        return getObject(store, url, headers; iofunction=receive, kw...)
+    end
 end
 
 function getObjectImpl(x::AbstractStore, key::Resource, out::ResponseBodyType=nothing;
@@ -309,12 +378,15 @@ function getObjectImpl(x::AbstractStore, key::Resource, out::ResponseBodyType=no
     # it's much simpler and then later we'll do all the multipart stitching logic
     local body
     if !allowMultipart
+        # The status is checked below, so an error body never becomes the result and
+        # stays out of a caller's buffer, stream, or file.
+        singlekw = merge(kw, SINGLE_GET_KW)
         if out === nothing
-            resp = getObject(x, url, headers; kw...)
+            resp = getObject(x, url, headers; singlekw...)
             res = resp.body
         elseif out isa AbstractVector{UInt8}
             resp = try
-                getObject(x, url, headers; response_stream=out, kw...)
+                getObject(x, url, headers; response_stream=out, singlekw...)
             catch e
                 e = _check_buffer_too_small_exception(e)
                 rethrow(e)
@@ -323,23 +395,18 @@ function getObjectImpl(x::AbstractStore, key::Resource, out::ResponseBodyType=no
             file = open(out, "w")
             body = decompress ? decompressorstream(zlibng)(file) : file
             try
-                resp = getObject(x, url, headers; response_stream=body, kw...)
-                check_redirect(key, resp)
+                resp = streamresponse!(body, x, url, headers; singlekw...)
+                checkstatus(key, resp)
             catch
                 # Close the file itself: closing a decompressor over partial data throws.
                 close(file)
                 rethrow()
             end
         else
-            if decompress
-                body = decompressorstream(zlibng)(out)
-                resp = getObject(x, url, headers; response_stream=body, kw...)
-            else
-                body = out
-                resp = getObject(x, url, headers; response_stream=out, kw...)
-            end
+            body = decompress ? decompressorstream(zlibng)(out) : out
+            resp = streamresponse!(body, x, url, headers; singlekw...)
         end
-        check_redirect(key, resp)
+        checkstatus(key, resp)
         nbytes[] = receivedbytes(resp)
         @goto done
     end

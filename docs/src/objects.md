@@ -69,7 +69,8 @@ single GET without a range instead. Set `decompress=true` to gunzip the download
 Each later range response must match the first one: the requested bytes, the object size,
 and the strong ETag. If the object changes during the download or a response is incomplete,
 `get` throws instead of returning mixed or partial data. The destination may already hold
-some of the bytes. S3 and Azure Blob Storage send strong ETags; for other endpoints, pass
+some of the bytes. A failed response throws an `HTTP.StatusError` whose `response.body` is
+the provider's error message; that message is never written to the destination. S3 and Azure Blob Storage send strong ETags; for other endpoints, pass
 `allowMultipart=false` to make a single GET. Conditional headers you pass, such as
 `If-Match`, and query parameters in an object URL, such as `versionId`, apply to every
 request.
