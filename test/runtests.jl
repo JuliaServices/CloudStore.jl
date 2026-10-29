@@ -246,6 +246,59 @@ end
     end
 end
 
+@testset "single-request downloads keep error bodies out of the destination" begin
+    data = collect(codeunits("object data"))
+    # Larger than a decompressor's input buffer, so writing it into one would fail there.
+    errorbody = "<Error><Code>NoSuchKey</Code><Message>" * "x"^100_000 * "</Message></Error>"
+    attempts = Ref(0)
+    server = HTTP.serve!(0; listenany=true, verbose=false) do request
+        key = last(split(HTTP.URI(request.target).path, '/'))
+        key == "missing" && return HTTP.Response(404, errorbody)
+        # S3 answers a request to the wrong region with a 301 that has no Location.
+        key == "moved" && return HTTP.Response(301, errorbody)
+        if startswith(key, "flaky")
+            attempts[] += 1
+            attempts[] == 1 && return HTTP.Response(503, errorbody)
+        end
+        return HTTP.Response(200, endswith(key, ".gz") ? transcode(GzipCompressor, data) : data)
+    end
+    port = HTTP.port(server)
+    stores = (S3.Bucket("bucket-name", "us-east-1"; host="http://127.0.0.1:$port"),
+        Blobs.Container("container", "account"; host="http://127.0.0.1:$port"))
+    contents(out) = out isa String ? read(out) : take!(out)
+    dir = mktempdir()
+    try
+        for store in stores, (output, decompress) in ((:io, false), (:file, false), (:io, true), (:file, true))
+            fresh() = output == :io ? IOBuffer() : tempname(dir)
+            kw = (; allowMultipart=false, decompress)
+            out = fresh()
+            err = try
+                CloudStore.get(store, "missing", out; kw...)
+            catch e
+                e
+            end
+            @test err isa StatusError && err.status == 404
+            @test String(copy(err.response.body)) == errorbody
+            @test isempty(contents(out))
+            out = fresh()
+            @test_throws ArgumentError CloudStore.get(store, "moved", out; kw...)
+            @test isempty(contents(out))
+            # The retried 503's body never reaches the destination; the 200 body does.
+            attempts[] = 0
+            out = fresh()
+            CloudStore.get(store, decompress ? "flaky.gz" : "flaky", out; kw...)
+            @test attempts[] == 2
+            @test contents(out) == data
+        end
+        # Without a destination, an error body is never returned as the object.
+        @test_throws StatusError CloudStore.get(stores[1], "missing";
+            allowMultipart=false, status_exception=false)
+    finally
+        close(server)
+        rm(dir; recursive=true)
+    end
+end
+
 @testset "listing continues past empty pages" begin
     # Providers may return a page with no entries that still carries a continuation token.
     server = HTTP.serve!(0; listenany=true, verbose=false) do request
