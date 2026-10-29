@@ -9,7 +9,10 @@ const Credentials = AWS.Credentials
 
 API.cloudName(::Bucket) = "S3"
 
-object(b::Bucket, creds, x) = Object(b, creds, x["Key"], parse(Int, x["Size"]), API.etag(x["ETag"]))
+# An `encoding-type=url` key is form-encoded: `+` is a space.
+s3key(x, encoded) = encoded ? HTTP.unescapeuri(replace(x["Key"], '+' => ' ')) : x["Key"]
+object(b::Bucket, creds, x, encoded) =
+    Object(b, creds, s3key(x, encoded), parse(Int, x["Size"]), API.etag(x["ETag"]))
 
 API.maxListKeys(::Bucket) = 1000
 API.listMaxKeysQuery(::Bucket) = "max-keys"
@@ -17,11 +20,15 @@ API.continuationToken(::Bucket) = "continuation-token"
 
 function API.listObjects(x::Bucket, query, result=nothing; credentials=nothing, kw...)
     query["list-type"] = "2"
+    # Raw keys do not survive XML: control characters fail to parse, and XMLDict drops
+    # a whitespace-only key.
+    query["encoding-type"] = "url"
     result = xml_dict(String(AWS.get(x.baseurl; credentials, query, service="s3", kw...).body))["ListBucketResult"]
     # A page can be empty and still continue; only the token ends the listing.
     token = result["IsTruncated"] == "true" ? result["NextContinuationToken"] : ""
-    parse(Int, result["KeyCount"]) == 0 && return (Object[], token)
-    contents = map(y -> object(x, credentials, y), API.asArray(result["Contents"]))
+    # Common prefixes of a delimiter listing count in KeyCount but are not objects.
+    encoded = Base.get(result, "EncodingType", "") == "url"
+    contents = Object[object(x, credentials, y, encoded) for y in API.xmlelements(result, "Contents")]
     return (contents, token)
 end
 

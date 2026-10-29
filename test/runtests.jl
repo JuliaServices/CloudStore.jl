@@ -272,6 +272,48 @@ end
     end
 end
 
+@testset "listing delimiter pages and keys XML cannot hold" begin
+    s3pages = Dict(
+        # A delimiter listing's common prefixes count in KeyCount.
+        "folders" => "<ListBucketResult><KeyCount>2</KeyCount><IsTruncated>false</IsTruncated><CommonPrefixes><Prefix>a/</Prefix></CommonPrefixes><CommonPrefixes><Prefix>b/</Prefix></CommonPrefixes></ListBucketResult>",
+        "encoded" => "<ListBucketResult><KeyCount>3</KeyCount><IsTruncated>false</IsTruncated><EncodingType>url</EncodingType>" *
+            join("<Contents><Key>$k</Key><Size>1</Size><ETag>\"e\"</ETag></Contents>" for k in ("+", "a+b%2Bc", "x%01y")) *
+            "<CommonPrefixes><Prefix>p%2F</Prefix></CommonPrefixes></ListBucketResult>",
+        # A service that ignores `encoding-type` returns raw keys.
+        "raw" => "<ListBucketResult><KeyCount>1</KeyCount><IsTruncated>false</IsTruncated><Contents><Key>a+b%2B</Key><Size>1</Size><ETag>\"e\"</ETag></Contents></ListBucketResult>",
+    )
+    blob(name) = "<Blob>$name<Properties><Content-Length>1</Content-Length><Etag>0x1</Etag></Properties></Blob>"
+    azurepages = Dict(
+        "folders" => "<EnumerationResults><Blobs><BlobPrefix><Name>a/</Name></BlobPrefix><BlobPrefix><Name>b/</Name></BlobPrefix></Blobs><NextMarker /></EnumerationResults>",
+        # Prefixes and blobs interleave in name order; names can be whitespace or encoded.
+        "names" => "<EnumerationResults><Blobs><BlobPrefix><Name>a/</Name></BlobPrefix>" *
+            blob("<Name> </Name>") * "<BlobPrefix><Name>c/</Name></BlobPrefix>" * blob("<Name>\u00a0</Name>") *
+            blob("<Name Encoded=\"true\">x%01y</Name>") * blob("<Name>!d</Name>") * "</Blobs><NextMarker /></EnumerationResults>",
+    )
+    queries = Channel{Dict{String,String}}(16)
+    server = HTTP.serve!(0; listenany=true, verbose=false) do request
+        query = HTTP.queryparams(HTTP.URI(request.target))
+        put!(queries, query)
+        return HTTP.Response(200, haskey(query, "list-type") ? s3pages[query["prefix"]] : azurepages[query["prefix"]])
+    end
+    port = HTTP.port(server)
+    try
+        bucket = S3.Bucket("bucket-name", "us-east-1"; host="http://127.0.0.1:$port")
+        delimiter = Dict("delimiter" => "/")
+        @test isempty(S3.list(bucket; prefix="folders", query=copy(delimiter)))
+        @test take!(queries)["encoding-type"] == "url"
+        @test [o.key for o in S3.list(bucket; prefix="encoded", query=copy(delimiter))] == [" ", "a b+c", "x\x01y"]
+        @test [o.key for o in S3.list(bucket; prefix="raw")] == ["a+b%2B"]
+        container = Blobs.Container("container", "account"; host="http://127.0.0.1:$port")
+        @test isempty(Blobs.list(container; prefix="folders", query=copy(delimiter)))
+        objects = Blobs.list(container; prefix="names", query=copy(delimiter), get_properties=true)
+        @test [o.key for o in objects] == [" ", "\u00a0", "x\x01y", "!d"]
+        @test [o.properties["Name"] for o in objects] == [" ", "\u00a0", "x\x01y", "!d"]
+    finally
+        close(server)
+    end
+end
+
 CloudStore.API.startMultipartUpload(::RecordingStore, _key; kw...) = nothing
 
 function CloudStore.API.putObject(store::RecordingStore, key, body; kw...)
