@@ -571,8 +571,8 @@ Wait for active part requests, then abort the multipart upload. S3 removes the
 uploaded parts immediately. Azure has no matching abort request and removes
 uncommitted blocks after its service retention period.
 """
-# `contentType` describes the object; the do-block form passes it here too.
 function abort(io::MultipartUploadStream; credentials=io.credentials, contentType=nothing, kw...)
+    # `contentType` describes the object; the do-block form passes it here too.
     Base.@lock io.cond_wait begin
         io.closed && return nothing
         io.aborted && return nothing
