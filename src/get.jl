@@ -170,7 +170,7 @@ const FIRST_PART_SIZE = 2^18
 const EARLY_PARTS = isdefined(HTTP, :ResponseHeadEvent)
 
 # Parts 2.. of a download, started by `startparts!` from the first range's response head.
-# Setting `stop` keeps later batches from starting once the first part has failed.
+# Setting `stop` keeps workers from taking another range after the first part fails.
 mutable struct EarlyParts
     task::Union{Nothing,Task}
     total::Int
@@ -207,11 +207,13 @@ function startparts!(early::EarlyParts, ev, out, firstSize, x, url, headers, par
 end
 
 # Download parts 2.. of an object of `total` bytes whose first `firstbytes` bytes are
-# part 1, at most `batchSize` parts at a time: into the byte vector `res`, or (when `res`
-# is `nothing`) through `buffers`, in order, into the stream `body`. Calls `progress`
-# after each batch and returns whether it did. Stops before a batch once `early.stop`.
+# part 1: into the byte vector `res`, or (when `res` is `nothing`) through batches of
+# `buffers`, in order, into the stream `body`. Returns whether `progress` reported
+# the completed download.
 function getparts!(res, body, buffers, x, url, headers, firstbytes, partSize, total, tag, batchSize, nbytes, progress,
         early::Union{Nothing,EarlyParts}=nothing; kw...)
+    res === nothing || return getvectorparts!(res, x, url, headers, firstbytes, partSize,
+        total, tag, batchSize, nbytes, progress, early; kw...)
     nTasks = 1 + cld(total - firstbytes, partSize)
     nLoops = cld(nTasks, batchSize)
     downloads = Vector{Task}(undef, min(batchSize, nTasks))
@@ -226,24 +228,17 @@ function getparts!(res, body, buffers, x, url, headers, firstbytes, partSize, to
                 n == 1 && continue
                 downloads[i] = Threads.@spawn begin
                     rng = partrange($n, firstbytes, partSize, total)
-                    if res !== nothing
-                        # The Content-Range header is 0-indexed; the view is 1-indexed.
-                        buf = view(res, (first(rng) + 1):(last(rng) + 1))
-                    else
-                        buf = view(buffers[$i], 1:length(rng))
-                    end
+                    buf = view(buffers[$i], 1:length(rng))
                     received = getRange!(buf, x, url, headers, rng, total, tag; kw...)
                     Threads.atomic_add!(nbytes, received)
                 end
             end
             # Write parts in order as they are validated while later parts
             # download. On failure, @sync still waits for every task.
-            if res === nothing
-                Threads.@spawn for i = (j == 1 ? 2 : 1):count
-                    wait(downloads[i])
-                    rng = partrange((j - 1) * batchSize + i, firstbytes, partSize, total)
-                    write(body, view(buffers[i], 1:length(rng)))
-                end
+            Threads.@spawn for i = (j == 1 ? 2 : 1):count
+                wait(downloads[i])
+                rng = partrange((j - 1) * batchSize + i, firstbytes, partSize, total)
+                write(body, view(buffers[i], 1:length(rng)))
             end
         end
         if progress !== nothing
@@ -254,7 +249,44 @@ function getparts!(res, body, buffers, x, url, headers, firstbytes, partSize, to
     return reported
 end
 
-# After the first part fails: keep further batches from starting, and wait for the
+# Each worker takes another range as soon as its preceding range finishes. Separate
+# ranges write to disjoint result memory, so one slow range need not hold up a batch.
+function getvectorparts!(res, x, url, headers, firstbytes, partSize, total, tag, batchSize,
+        nbytes, progress, early; kw...)
+    lastpart = 1 + cld(total - firstbytes, partSize)
+    lastpart == 1 && return false
+    nextpart = Threads.Atomic{Int}(2)
+    stopped = Threads.Atomic{Bool}(false)
+    progresslock = ReentrantLock()
+    reported = Ref(0)
+    @sync for _ in 1:min(batchSize, lastpart - 1)
+        Threads.@spawn try
+            while !stopped[] && (early === nothing || !(@atomic early.stop))
+                n = Threads.atomic_add!(nextpart, 1)
+                n > lastpart && break
+                rng = partrange(n, firstbytes, partSize, total)
+                buf = view(res, (first(rng) + 1):(last(rng) + 1))
+                received = getRange!(buf, x, url, headers, rng, total, tag; kw...)
+                if progress === nothing
+                    Threads.atomic_add!(nbytes, received)
+                else
+                    Base.@lock progresslock begin
+                        count = Threads.atomic_add!(nbytes, received) + received
+                        progress(total, count)
+                        reported[] = count
+                    end
+                end
+            end
+        catch
+            stopped[] = true
+            rethrow()
+        end
+    end
+    # Early workers can finish before the first part contributes its byte count.
+    return progress !== nothing && reported[] == total
+end
+
+# After the first part fails: keep workers from taking another range, and wait for the
 # parts in flight, which write into the result.
 function stopparts!(early::EarlyParts)
     early.task === nothing && return nothing

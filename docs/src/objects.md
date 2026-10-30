@@ -65,7 +65,9 @@ destination buffer's length; 256 KiB, or `partSize` if smaller, for a file or st
 destination). The response gives the object's
 size and ETag, so a smaller object needs no other request; the rest of a larger object
 downloads in parallel parts of `partSize` bytes, which start as soon as the first response's
-headers arrive when the result is a byte vector. Without a destination buffer, HTTP grows
+headers arrive when the result is a byte vector. Up to `batchSize` workers fetch these
+later parts; each starts its next range as soon as the preceding range finishes. A slow
+range does not hold up the other workers. Without a destination buffer, HTTP grows
 the first part's buffer as its bytes arrive, so passing a buffer avoids that copy. A
 destination buffer shorter than `multipartThreshold`, or `objectMaxSize` below it, makes a
 single GET without a range instead. Set `decompress=true` to gunzip the downloaded bytes.
