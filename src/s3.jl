@@ -90,10 +90,10 @@ function API.completeMultipartUpload(x::Bucket, url, eTags, uploadId;
     catch e
         # A retry whose earlier attempt completed the upload (its response was lost)
         # finds no upload (404 NoSuchUpload) or fails a write condition against the
-        # object that attempt stored (412).
-        (e isa HTTP.StatusError && e.status in (404, 412)) || rethrow()
+        # object that attempt stored (412, or 409 ConditionalRequestConflict).
+        (e isa HTTP.StatusError && e.status in (404, 409, 412)) || rethrow()
         # A failed condition leaves the upload in progress; a completed upload is gone.
-        e.status == 412 && !uploadgone(url, uploadId; kw...) && rethrow()
+        e.status != 404 && !uploadgone(url, uploadId; kw...) && rethrow()
         tag = completedetag(url, eTags; kw...)
         if tag === nothing
             # Gone, but the ETag does not show these parts: SSE-KMS and SSE-C ETags are not

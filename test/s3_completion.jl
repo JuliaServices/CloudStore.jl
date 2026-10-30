@@ -93,12 +93,13 @@ end
 @testset "S3 completion after a lost response" begin
     # The first completion completes the upload but its response fails (HTTP 500, which
     # HTTP retries). The retry finds no upload (404), or, with a write condition, fails it
-    # against the stored object (412). The upload ID is then gone, and the object's ETag
-    # shows whether it is this upload: S3 derives it from the part ETags. A failed
-    # condition leaves the upload open, so a 412 with the upload still listed is final.
+    # against the stored object (412 or 409). The upload ID is then gone, and the object's
+    # ETag shows whether it is this upload: S3 derives it from the part ETags. A failed
+    # condition leaves the upload open, so a failure with the upload still listed is final.
     parttags = ("\"00112233445566778899aabbccddeeff\"", "\"ffeeddccbbaa99887766554433221100\"")
     expected = "2c9fc96c5e9c12cc2e04537710e74a63-2"
-    cases = ((404, true, true), (404, false, true), (412, true, true), (412, false, true), (412, true, false))
+    cases = ((404, true, true), (404, false, true), (409, true, true),
+        (412, true, true), (412, false, true), (412, true, false))
     for (status, ours, gone) in cases, upload in (:put, :stream)
         methods = Channel{String}(16)
         conditions = Channel{String}(16)
@@ -125,7 +126,7 @@ end
         try
             bucket = S3.Bucket("bucket-name", "us-east-1"; host="http://127.0.0.1:$(HTTP.port(server))")
             credentials = S3.Credentials("test-access-key", "test-secret-key")
-            headers = status == 412 ? ["If-None-Match" => "*"] : []
+            headers = status == 404 ? [] : ["If-None-Match" => "*"]
             logger = Test.TestLogger()
             result = Base.with_logger(logger) do
                 try
@@ -147,10 +148,13 @@ end
             close(methods)
             close(conditions)
             sent = collect(methods)
-            @test collect(conditions) == (status == 412 ? ["*", "*"] : ["", ""])
-            # NoSuchUpload already says the upload is gone; a 412 needs ListParts (GET).
-            checks = status == 412 ? (gone ? ["GET", "HEAD"] : ["GET"]) : ["HEAD"]
-            @test sent == ["POST", "PUT", "PUT", "POST", "POST", checks..., (ours && gone ? () : ("DELETE",))...]
+            # Every completion attempt carries the condition (HTTP 1 also retries a 409 itself).
+            sentconditions = collect(conditions)
+            @test length(sentconditions) >= 2 && all(==(status == 404 ? "" : "*"), sentconditions)
+            # NoSuchUpload already says the upload is gone; a 409 or 412 needs ListParts (GET).
+            checks = status == 404 ? ["HEAD"] : gone ? ["GET", "HEAD"] : ["GET"]
+            @test sent[1:3] == ["POST", "PUT", "PUT"] && all(==("POST"), sent[4:3+length(sentconditions)])
+            @test sent[4+length(sentconditions):end] == [checks..., (ours && gone ? () : ("DELETE",))...]
             if ours && gone
                 @test result == expected
             else
