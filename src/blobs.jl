@@ -103,7 +103,32 @@ function API.completeMultipartUpload(x::Container, url, eTags, uploadId;
     contentType === nothing || HTTP.setheader(
         headers, "x-ms-blob-content-type" => String(contentType))
     body = XMLDict.node_xml("BlockList", Dict("Latest" => eTags))
-    return commitblocklist(url, body; headers, kw...)
+    try
+        return commitblocklist(url, body; headers, kw...)
+    catch e
+        # A retry whose earlier attempt committed the blocks (its response was lost)
+        # fails a write condition against the blob that attempt stored: 409 for
+        # If-None-Match, 412 for If-Match.
+        (e isa HTTP.StatusError && e.status in (409, 412)) || rethrow()
+        tag = committedetag(url, eTags; kw...)
+        tag === nothing && rethrow()
+        return tag
+    end
+end
+
+# The blob's ETag if its committed blocks are exactly `ids`, in order, else `nothing`.
+# Block IDs carry this upload's random prefix, so only this upload's commit lists them.
+function committedetag(url, ids; kw...)
+    isempty(ids) && return nothing
+    try
+        resp = Azure.get(url; query=Dict("comp" => "blocklist", "blocklisttype" => "committed"), kw...)
+        resp.status == 200 || return nothing
+        blocks = blockentries(xml_dict(String(resp.body))["BlockList"], "CommittedBlocks")
+        tag = HTTP.header(resp, "ETag", "")
+        return !isempty(tag) && [block.id for block in blocks] == ids ? API.etag(tag) : nothing
+    catch
+        return nothing
+    end
 end
 
 function commitblocklist(url, body; headers=HTTP.Headers(), kw...)
