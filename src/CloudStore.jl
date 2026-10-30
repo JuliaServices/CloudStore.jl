@@ -123,7 +123,8 @@ include("objectbytes.jl")
     CloudStore.get(source[, output]; progress=nothing, kwargs...)
 
 Download an object. When `progress` is a function, call it as
-`progress(total_bytes, transferred_bytes)` after completed transfer batches. This
+`progress(total_bytes, transferred_bytes)` after completed ranges or stream batches.
+Calls are serialized even when ranges finish concurrently. This
 matches the callback order used by `Downloads.download`.
 """
 get(x::Object, out::ResponseBodyType=nothing; kw...) = get(x.store, x.key, out; kw...)
