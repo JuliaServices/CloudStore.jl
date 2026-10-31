@@ -117,6 +117,10 @@ function putObjectImpl(x::AbstractStore, key::Resource, in::RequestBodyType;
     headers=nothing,
     lograte::Bool=false, kw...)
 
+    if allowMultipart
+        partSize > 0 || throw(ArgumentError("partSize must be > 0"))
+        batchSize > 0 || throw(ArgumentError("batchSize must be > 0"))
+    end
     kw = merge(OWNED_HEADERS_KW, (; kw...))
     start_time = time()
     N = nbytes(in)
