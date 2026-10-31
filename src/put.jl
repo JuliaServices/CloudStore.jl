@@ -105,6 +105,58 @@ function closeuploadbody(body, in, zlibng)
 end
 compressor(zlibng) = zlibng ? CodecZlibNG.GzipCompressor : CodecZlib.GzipCompressor
 
+# Vector parts borrow stable storage, so a finished request can immediately take
+# another part. Receipts stay in part order even when requests finish out of order.
+function putvectorparts!(eTags, wbytes, x, url, data, partSize, batchSize, uploadState, progress; kw...)
+    lastpart = cld(length(data), partSize)
+    resize!(eTags, lastpart)
+    nextpart = Ref(1)
+    stopped = Threads.Atomic{Bool}(false)
+    callback_error = Ref{Any}(nothing)
+    state = ReentrantLock()
+    try
+        @sync for _ in 1:min(batchSize, lastpart)
+            Threads.@spawn try
+                while true
+                    n = Base.@lock state begin
+                        if stopped[] || nextpart[] > lastpart
+                            0
+                        else
+                            part = nextpart[]
+                            nextpart[] += 1
+                            part
+                        end
+                    end
+                    n == 0 && break
+                    firstbyte = (n - 1) * partSize + 1
+                    lastbyte = firstbyte + min(partSize, length(data) - firstbyte + 1) - 1
+                    part = uploadbytes(view(data, firstbyte:lastbyte))
+                    parteTag, wb = uploadPart(x, url, part, n, uploadState; kw...)
+                    eTags[n] = parteTag
+                    Base.@lock state begin
+                        Threads.atomic_add!(wbytes, wb)
+                        if progress !== nothing && !stopped[]
+                            try
+                                progress(length(data), wbytes[])
+                            catch err
+                                callback_error[] = err
+                                stopped[] = true
+                            end
+                        end
+                    end
+                end
+            catch
+                stopped[] = true
+                rethrow()
+            end
+        end
+    finally
+        # @sync drains every request before a callback error reaches the caller.
+        callback_error[] === nothing || throw(callback_error[])
+    end
+    return progress !== nothing && lastpart > 0
+end
+
 function putObjectImpl(x::AbstractStore, key::Resource, in::RequestBodyType;
     multipartThreshold::Int=MULTIPART_THRESHOLD,
     partSize::Int=MULTIPART_SIZE,
@@ -165,37 +217,42 @@ function putObjectImpl(x::AbstractStore, key::Resource, in::RequestBodyType;
         body === nothing && (body = prepBodyMultipart(in, compress, zlibng))
         partNumber = 0
         try
-            # Compression can make incompressible input larger than its source, so the
-            # source byte count cannot safely bound the number of output parts.
-            while pending !== nothing || !eof(body)
-                parts = Tuple{Int,Any}[]
-                for index = 1:batchSize
-                    if pending !== nothing
-                        # Read ahead into slot 1 while choosing multipart.
-                        part, pending = pending, nothing
-                    else
-                        eof(body) && break
-                        part = _read(body, partSize, buffers, index)
+            if in isa AbstractVector{UInt8} && !compress
+                progressReported = putvectorparts!(eTags, wbytes, x, url, in,
+                    partSize, batchSize, uploadState, progress; credentials, kw...)
+            else
+                # Compression can make incompressible input larger than its source, so the
+                # source byte count cannot safely bound the number of output parts.
+                while pending !== nothing || !eof(body)
+                    parts = Tuple{Int,Any}[]
+                    for index = 1:batchSize
+                        if pending !== nothing
+                            # Read ahead into slot 1 while choosing multipart.
+                            part, pending = pending, nothing
+                        else
+                            eof(body) && break
+                            part = _read(body, partSize, buffers, index)
+                        end
+                        isempty(part) && break
+                        partNumber += 1
+                        push!(parts, (partNumber, part))
                     end
-                    isempty(part) && break
-                    partNumber += 1
-                    push!(parts, (partNumber, part))
-                end
-                isempty(parts) && break
-                results = Vector{Tuple{String,Int}}(undef, length(parts))
-                @sync for index in eachindex(parts)
-                    n, part = parts[index]
-                    Threads.@spawn begin
-                        results[$index] = uploadPart(
-                            x, url, $part, $n, uploadState; credentials, kw...)
+                    isempty(parts) && break
+                    results = Vector{Tuple{String,Int}}(undef, length(parts))
+                    @sync for index in eachindex(parts)
+                        n, part = parts[index]
+                        Threads.@spawn begin
+                            results[$index] = uploadPart(
+                                x, url, $part, $n, uploadState; credentials, kw...)
+                        end
                     end
-                end
-                for (parteTag, wb) in results
-                    push!(eTags, parteTag)
-                    Threads.atomic_add!(wbytes, wb)
-                    if progress !== nothing
-                        progress(something(compress ? 0 : N, 0), wbytes[])
-                        progressReported = true
+                    for (parteTag, wb) in results
+                        push!(eTags, parteTag)
+                        Threads.atomic_add!(wbytes, wb)
+                        if progress !== nothing
+                            progress(something(compress ? 0 : N, 0), wbytes[])
+                            progressReported = true
+                        end
                     end
                 end
             end

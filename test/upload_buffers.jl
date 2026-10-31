@@ -371,11 +371,11 @@ Base.close(io::FragmentedInput) = close(io.data)
             mktemp() do file, input
                 write(input, data)
                 flush(input)
-                for (store, credentials) in stores
-                    CloudStore.put(store, "retry", file; credentials,
+                for (store, credentials) in stores, (kind, source) in (("file", file), ("vector", data))
+                    CloudStore.put(store, "retry-$kind", source; credentials,
                         multipartThreshold=1, partSize=1024, batchSize=2, retries=1,
                         require_ssl_verification=true, options...)
-                    path = String(HTTP.URI(API.makeURL(store, "retry")).path)
+                    path = String(HTTP.URI(API.makeURL(store, "retry-$kind")).path)
                     @test path in completed
                     @test !(path in aborted)
                     @test sort!(collect(keys(received[path]))) == collect(1:5)
@@ -383,12 +383,17 @@ Base.close(io::FragmentedInput) = close(io.data)
                         expected = data[(n - 1) * 1024 + 1:min(n * 1024, length(data))]
                         @test received[path][n] == [expected, expected]
                     end
-                    @test_throws Exception CloudStore.put(store, "failure", file; credentials,
+                    @test_throws Exception CloudStore.put(store, "failure-$kind", source; credentials,
                         multipartThreshold=1, partSize=1024, batchSize=2, retries=0,
                         require_ssl_verification=true, options...)
-                    path = String(HTTP.URI(API.makeURL(store, "failure")).path)
+                    path = String(HTTP.URI(API.makeURL(store, "failure-$kind")).path)
                     @test !(path in completed)
-                    @test sort!(collect(keys(received[path]))) == [1, 2]
+                    if kind == "file"
+                        @test sort!(collect(keys(received[path]))) == [1, 2]
+                    else
+                        @test !isempty(received[path])
+                        @test all(n -> n in 1:2, keys(received[path]))
+                    end
                     @test (path in aborted) == (store isa CloudStore.S3.Bucket)
                 end
             end
