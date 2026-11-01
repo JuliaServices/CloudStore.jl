@@ -275,6 +275,27 @@ end
     end
 end
 
+@testset "Progress completes when the first body finishes last" begin
+    data = collect(UInt8(0):UInt8(63))
+    for provider in 1:2
+        updates = Tuple{Int,Int}[]
+        later_finished = Channel{Nothing}(1)
+        before_body = range -> startswith(range, "bytes=0-") &&
+            (timedwait(() -> isready(later_finished), 10) == :ok || error("later parts did not finish"))
+        with_range_fixture(; data, before_body) do host, requests
+            store, credentials = range_stores(host)[provider]
+            progress = function(total, received)
+                push!(updates, (total, received))
+                received == 48 && put!(later_finished, nothing)
+            end
+            @test CloudStore.get(store, "data"; credentials, progress,
+                multipartThreshold=1, partSize=16, batchSize=2, retries=0) == data
+            @test last(updates) == (64, 64)
+            @test issorted(last.(updates))
+        end
+    end
+end
+
 @testset "Single GET without Content-Length" begin
     with_range_fixture(:chunked) do host, requests
         for (store, credentials) in range_stores(host), output in (nothing, zeros(UInt8, 20), IOBuffer())
