@@ -77,6 +77,9 @@ Keep that storage unchanged until the call returns, including retries. Files,
 other `IO` inputs, and compressed uploads use extra buffers. On HTTP 1, views
 over non-`Array` storage (such as string bytes) are copied first.
 
+Uncompressed byte-vector uploads keep at most `batchSize` part requests in flight.
+Each finished request starts another part without waiting for the other requests.
+
 File and compressed multipart uploads read parts into at most `batchSize` reusable
 buffers. A buffer is refilled only after every upload in its batch, including
 retries, has finished. Other `IO` inputs allocate a new buffer for each part.

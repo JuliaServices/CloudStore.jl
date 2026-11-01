@@ -6,6 +6,7 @@ import HTTP
 import Sockets
 include("upload_validation.jl")
 include("upload_buffers.jl")
+include("upload_workers.jl")
 using HTTP: ConnectError, StatusError
 using Sockets: DNSError
 using ExceptionUnwrapping: unwrap_exception
