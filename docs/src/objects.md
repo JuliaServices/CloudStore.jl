@@ -39,6 +39,10 @@ Set `allowMultipart=false` to force one request. Set `compress=true` to gzip the
 bytes. CloudStore does not add `.gz` to the key, and the returned `Object` has the compressed
 size.
 
+When `allowMultipart=true`, `partSize` and `batchSize` must be positive, including for
+small uploads. CloudStore checks them before reading the input or starting a request.
+With `allowMultipart=false`, these multipart size options are ignored.
+
 ## Download
 
 Download into a new byte vector:
