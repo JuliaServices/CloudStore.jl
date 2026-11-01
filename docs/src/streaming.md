@@ -4,7 +4,7 @@ Use a stream when the complete object should not be in memory at one time.
 
 ## Prefetched downloads
 
-[`CloudStore.PrefetchedDownloadStream`](@ref) reads ranges in parallel into two buffers.
+[`CloudStore.PrefetchedDownloadStream`](@ref) reads ranges in parallel into up to two buffers.
 Construct it from an [`Object`](@ref):
 
 ```julia
@@ -20,18 +20,27 @@ finally
 end
 ```
 
-Tune the memory and request sizes when needed:
+Tune the memory, request size, and request concurrency when needed:
 
 ```julia
 io = CloudStore.PrefetchedDownloadStream(
     obj,
     16 * 1024^2;
     prefetch_multipart_size=2 * 1024^2,
+    prefetch_concurrency=8,
 )
 ```
 
-The first positional size is the size of each in-memory prefetch buffer. The keyword value is
-the maximum size of each range request. The stream is read-only and is not thread-safe.
+The first positional size is the size of each in-memory prefetch buffer;
+`prefetch_multipart_size` is the maximum size of each range request. The positive integer
+`prefetch_concurrency` limits concurrent range requests and defaults to `Threads.nthreads()`.
+It is capped by the number of ranges in one buffer, so the example permits at most eight
+requests at a time, even when Julia has fewer threads.
+
+More concurrent requests can overlap network waits, but may use more connections and
+HTTP/TLS memory. They do not increase the prefetch buffer sizes. Increasing the buffer
+size permits more ranges at once and increases buffer memory. Small objects need fewer
+requests and smaller buffers. The stream is read-only and is not thread-safe.
 
 Prefetched streams and `copyto!(dest, doff, object, soff, n)` check every range response
 against the object's size and strong ETag, and throw if the object changed. An `Object`
