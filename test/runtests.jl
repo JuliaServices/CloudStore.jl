@@ -4,7 +4,9 @@ import CloudStore: S3, Blobs
 using CodecZlib
 import HTTP
 import Sockets
+include("upload_validation.jl")
 include("upload_buffers.jl")
+include("upload_workers.jl")
 using HTTP: ConnectError, StatusError
 using Sockets: DNSError
 using ExceptionUnwrapping: unwrap_exception
@@ -480,7 +482,9 @@ end
         progress=(total, transferred) -> push!(download_updates, (total, transferred)),
     )
     @test result == data
-    @test download_updates == [(10, 8), (10, 10)]
+    @test all(update -> first(update) == 10 && 4 < last(update) <= 10, download_updates)
+    @test issorted(last.(download_updates))
+    @test last(download_updates) == (10, 10)
 
     single_updates = Tuple{Int,Int}[]
     result = CloudStore.API.getObjectImpl(
@@ -1852,4 +1856,6 @@ end # @testset "CloudStore.jl"
 
 include("transfer_storage.jl")
 include("range_downloads.jl")
+include("range_workers.jl")
+include("prefetch_concurrency.jl")
 include("objectbytes.jl")

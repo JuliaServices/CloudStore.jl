@@ -175,17 +175,20 @@ function _download_task(io; headers=nothing, kw...)
 end
 
 # assumes part_size > 0
-_ndownload_tasks(total_size, part_size, numthreads=Threads.nthreads()) =
-    min(numthreads, max(1, div(total_size, part_size, RoundUp)))
+_ndownload_tasks(total_size, part_size, concurrency=Threads.nthreads()) =
+    min(concurrency, max(1, div(total_size, part_size, RoundUp)))
 
 """
-    PrefetchedDownloadStream(object::CloudStore.Object, prefetch_size=32 * 1024^2; prefetch_multipart_size=8 * 1024^2, kwargs...)
-    PrefetchedDownloadStream(store, key, prefetch_size=32 * 1024^2; credentials=nothing, prefetch_multipart_size=8 * 1024^2, kwargs...)
+    PrefetchedDownloadStream(object::CloudStore.Object, prefetch_size=32 * 1024^2; prefetch_multipart_size=8 * 1024^2, prefetch_concurrency=Threads.nthreads(), kwargs...)
+    PrefetchedDownloadStream(store, key, prefetch_size=32 * 1024^2; credentials=nothing, prefetch_multipart_size=8 * 1024^2, prefetch_concurrency=Threads.nthreads(), kwargs...)
 
-A read-only `IO` over a remote object that downloads ahead of the reader. Two buffers of
+A read-only `IO` over a remote object that downloads ahead of the reader. Up to two buffers of
 `prefetch_size` bytes alternate: while you read one, background tasks fill the other with
-range requests of at most `prefetch_multipart_size` bytes, using up to
-`Threads.nthreads()` tasks.
+range requests of at most `prefetch_multipart_size` bytes. `prefetch_concurrency` is a
+positive integer limiting concurrent range requests; it defaults to `Threads.nthreads()`
+and is capped by the number of ranges in one buffer. Raising it can overlap more network
+waits without increasing the buffer sizes, but may use more connections and HTTP/TLS
+memory. Increasing `prefetch_size` allows more ranges per buffer and uses more memory.
 
 Every range must match the object's size and strong ETag, so a changed object raises an
 error. The stream returns the stored bytes; wrap it in a decompressor such as
@@ -212,10 +215,12 @@ mutable struct PrefetchedDownloadStream{T <: Object} <: IO
         object::T,
         prefetch_size::Int=DEFAULT_PREFETCH_SIZE;
         prefetch_multipart_size::Int=DEFAULT_PREFETCH_MULTIPART_SIZE,
+        prefetch_concurrency::Int=Threads.nthreads(),
         kw...
     ) where {T<:Object}
         prefetch_size > 0 || throw(ArgumentError("`prefetch_size` must be positive, got $prefetch_size"))
         prefetch_multipart_size > 0 || throw(ArgumentError("`prefetch_multipart_size` must be positive, got $prefetch_multipart_size"))
+        prefetch_concurrency > 0 || throw(ArgumentError("`prefetch_concurrency` must be positive, got $prefetch_concurrency"))
         len = length(object)
         len > 0 && (object = rangeObject(object; kw...))
         size = min(prefetch_size, len)
@@ -231,7 +236,7 @@ mutable struct PrefetchedDownloadStream{T <: Object} <: IO
             TaskCondition()
         )
         if size > 0
-            for _ in 1:_ndownload_tasks(size, io.prefetch_multipart_size)
+            for _ in 1:_ndownload_tasks(size, io.prefetch_multipart_size, prefetch_concurrency)
                 Threads.@spawn _download_task($io; $kw...)
             end
             Threads.@spawn _prefetching_task($io)
@@ -249,10 +254,12 @@ mutable struct PrefetchedDownloadStream{T <: Object} <: IO
         prefetch_size::Int=DEFAULT_PREFETCH_SIZE;
         credentials::Union{CloudCredentials, Nothing}=nothing,
         prefetch_multipart_size::Int=DEFAULT_PREFETCH_MULTIPART_SIZE,
+        prefetch_concurrency::Int=Threads.nthreads(),
         kw...,
     )
+        prefetch_concurrency > 0 || throw(ArgumentError("`prefetch_concurrency` must be positive, got $prefetch_concurrency"))
         object = Object(store, key; credentials, kw...)
-        return PrefetchedDownloadStream(object, prefetch_size; prefetch_multipart_size, kw...)
+        return PrefetchedDownloadStream(object, prefetch_size; prefetch_multipart_size, prefetch_concurrency, kw...)
     end
 end
 Base.eof(io::PrefetchedDownloadStream) = io.pos > io.len

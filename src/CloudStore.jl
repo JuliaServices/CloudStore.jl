@@ -123,7 +123,8 @@ include("objectbytes.jl")
     CloudStore.get(source[, output]; progress=nothing, kwargs...)
 
 Download an object. When `progress` is a function, call it as
-`progress(total_bytes, transferred_bytes)` after completed transfer batches. This
+`progress(total_bytes, transferred_bytes)` after completed ranges or stream batches.
+Calls are serialized even when ranges finish concurrently. This
 matches the callback order used by `Downloads.download`.
 """
 get(x::Object, out::ResponseBodyType=nothing; kw...) = get(x.store, x.key, out; kw...)
@@ -153,10 +154,15 @@ An `IO` other than `IOBuffer` or `IOStream` has no known length, so one part
 `multipartThreshold` bytes is sent in one request, and a longer one is uploaded in
 parts as it is read.
 
-When `progress` is a function, call it as
-`progress(total_bytes, transferred_bytes)` after completed transfer batches. For a
-compressed multipart upload, `total_bytes` is `0` because the final wire size is not
-known before compression finishes.
+When `progress` is a function, call it as `progress(total_bytes, transferred_bytes)`.
+Uncompressed multipart byte-vector uploads report each completed part. Other
+multipart inputs report their completed parts after each batch finishes. A
+single-request upload reports completion once.
+
+Callbacks are serial. For uncompressed multipart byte-vector uploads, callbacks may
+run in worker tasks and must not rely on the calling task's local state or thread
+affinity. For a compressed multipart upload, `total_bytes` is `0` because the final
+wire size is not known before compression finishes.
 """
 put(x::Object, in::RequestBodyType; kw...) = put(x.store, x.key, in; kw...)
 delete(x::Object; kw...) = delete(x.store, x.key; kw...)
