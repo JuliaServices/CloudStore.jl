@@ -470,6 +470,25 @@ end
     end
 end
 
+@testset "decompressing into a byte view" begin
+    # Random bytes do not compress, so a view that holds the stored object holds the result.
+    data = rand(UInt8, 1000)
+    gz = transcode(GzipCompressor, data)
+    for allowMultipart in (true, false)
+        buffer = zeros(UInt8, length(gz) + 100)
+        result = CloudStore.API.getObjectImpl(RecordingDownloadStore(gz), "data.gz",
+            view(buffer, 51:50 + length(gz)); decompress=true, allowMultipart,
+            multipartThreshold=64, partSize=64)
+        @test result == data
+        @test buffer[51:1050] == data
+    end
+    # Compressed, this object fits in the view; decompressed, it does not.
+    text = rand(UInt8('a'):UInt8('z'), 1000)
+    @test_throws ArgumentError CloudStore.API.getObjectImpl(
+        RecordingDownloadStore(transcode(GzipCompressor, text)), "data.gz",
+        view(zeros(UInt8, 999), 1:999); decompress=true, multipartThreshold=64, partSize=64)
+end
+
 @testset "transfer progress callbacks" begin
     data = collect(UInt8(1):UInt8(10))
     download_updates = Tuple{Int,Int}[]
