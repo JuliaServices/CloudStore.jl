@@ -482,6 +482,16 @@ end
         @test result == data
         @test buffer[51:1050] == data
     end
+    @static if VERSION >= v"1.11"
+        # A Memory output is neither a Vector nor a view.
+        for allowMultipart in (true, false)
+            mem = Memory{UInt8}(undef, length(gz))
+            result = CloudStore.API.getObjectImpl(RecordingDownloadStore(gz), "data.gz", mem;
+                decompress=true, allowMultipart, multipartThreshold=64, partSize=64)
+            @test result == data
+            @test mem[1:length(data)] == data
+        end
+    end
     # Compressed, this object fits in the view; decompressed, it does not.
     text = rand(UInt8('a'):UInt8('z'), 1000)
     @test_throws ArgumentError CloudStore.API.getObjectImpl(

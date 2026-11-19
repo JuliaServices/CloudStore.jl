@@ -668,8 +668,8 @@ function getObjectImpl(x::AbstractStore, key::Resource, out::ResponseBodyType=no
         end
     elseif out isa AbstractVector{UInt8}
         if decompress
-            # make a copy of a view of just the compressed bytes in out, then decompress into out
-            compressed = copy(view(out, 1:nbytes[]))
+            # copy just the compressed bytes into a Vector (`transcode` needs one), then decompress into out
+            compressed = Vector{UInt8}(view(out, 1:nbytes[]))
             if out isa Vector{UInt8}
                 res = transcode(decompressor(zlibng), compressed, out)
             else
