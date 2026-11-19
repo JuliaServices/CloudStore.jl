@@ -1650,6 +1650,8 @@ end
         @test_throws ArgumentError parse_azure_url(blob=join(fill("a", 256), '/'))
 
         @test CloudStore.validate_blob("a"^1024) == "a"^1024
+        @test CloudStore.validate_blob("a") == "a"
+        @test parse_azure_url(blob="a")[5] == "a"
         @test CloudStore.validate_blob(join(fill("a", 254), '/')) == join(fill("a", 254), '/')
     end
 
