@@ -1741,6 +1741,25 @@ end
     end
 end
 
+@testset "CloudStore.MultipartUploadStream reports a failed part to later writes - S3" begin
+    Minio.with(; debug=true) do conf
+        credentials, bucket = conf
+        err = try
+            CloudStore.MultipartUploadStream(bucket, "gone.bin"; credentials) do io
+                # Another client discards the upload, so its parts fail with 404 NoSuchUpload.
+                S3.abortmultipartupload(bucket, "gone.bin", io.uploadState; credentials)
+                write(io, fill(0x2a, 5_500_000))
+                timedwait(() -> !isopen(io), 30)
+                write(io, fill(0x2b, 10))
+            end
+            nothing
+        catch e
+            e
+        end
+        @test err isa StatusError && err.status == 404
+    end
+end
+
 @testset "CloudStore.MultipartUploadStream failure due to too small upload size - S3" begin
     Minio.with(; debug=true) do conf
         credentials, bucket = conf
