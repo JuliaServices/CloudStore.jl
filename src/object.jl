@@ -374,11 +374,13 @@ function _upload_task(io; kw...)
             io.eTags[part_n] = parteTag
         end
     catch e
-        isopen(io.upload_queue) && close(io.upload_queue, e)
+        # Record the error before closing the queue, so a write that finds the upload
+        # closed can report why.
         Base.@lock io.cond_wait begin
             io.exc = e
             notify(io.cond_wait, all=true)
         end
+        isopen(io.upload_queue) && close(io.upload_queue, e)
     finally
         Base.release(io.sem)
         Base.@lock io.cond_wait begin
@@ -520,15 +522,17 @@ end
 
 # Writes a data chunk to the channel and spawn
 function Base.write(io::MultipartUploadStream, bytes::Vector{UInt8}; kw...)
+    # A failed part closes the upload; its error says why.
+    isnothing(io.exc) || throw(io.exc)
     isopen(io) || throw(InvalidStateException("multipart upload is closed", :closed))
     Base.acquire(io.sem)
     local part_n
     registered = false
     try
         Base.@lock io.cond_wait begin
+            isnothing(io.exc) || throw(io.exc)
             isopen(io) || throw(InvalidStateException(
                 "multipart upload is closed", :closed))
-            isnothing(io.exc) || throw(io.exc)
             io.ntasks += 1
             io.cur_part_id += 1
             part_n = io.cur_part_id
