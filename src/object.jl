@@ -522,9 +522,12 @@ end
 
 # Writes a data chunk to the channel and spawn
 function Base.write(io::MultipartUploadStream, bytes::Vector{UInt8}; kw...)
-    # A failed part closes the upload; its error says why.
-    isnothing(io.exc) || throw(io.exc)
-    isopen(io) || throw(InvalidStateException("multipart upload is closed", :closed))
+    if !isopen(io)
+        # A failed part records its error before it closes the upload, so read the
+        # error after seeing the upload closed; the error says why it closed.
+        isnothing(io.exc) || throw(io.exc)
+        throw(InvalidStateException("multipart upload is closed", :closed))
+    end
     Base.acquire(io.sem)
     local part_n
     registered = false
